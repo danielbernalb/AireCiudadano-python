@@ -4,7 +4,7 @@ import requests
 def transform_data(input_json):
     output_data = []
 
-    # Lista de tipos de medición queremos incluir, en el orden deseado
+    # Lista de tipos de medición que queremos incluir, en el orden deseado
     desired_measurements = ["PM25", "Temperature", "Humidity", "CO2"]
 
     for entry in input_json["data"]:
@@ -24,7 +24,7 @@ def transform_data(input_json):
             "observedOn": ""
         }
 
-        measurements = [] 
+        measurements = []
 
         for key, value in entry.items():
             if key == "labels":
@@ -34,15 +34,14 @@ def transform_data(input_json):
                 station["decimalLatitude"] = float(value["metrics"][0]["value"])
             elif key == "Longitude":
                 station["decimalLongitude"] = float(value["metrics"][0]["value"])
-            elif key in desired_measurements: 
+            elif key in desired_measurements:
                 measurement = {
                     "measurementID": value["time_stamp"],
-#                    "measurementType": "PM2.5" if key == "PM25" else key,
                     "measurementType": key,
                     "measurementUnit": get_measurement_unit(key),
                     "measurementDeterminedDate": value["time_stamp"],
-                    "measurementDeterminedBy": f"AireCiudadano station {station['station_name']}",
-                    "measurementValue": float(value["metrics"][0]["value"])
+                    "measurementDeterminedBy": "",  # Se actualizará más adelante
+                    "measurementValue": int(float(value["metrics"][0]["value"]))
                 }
                 measurements.append(measurement)
                 station["locationID"] = value["time_stamp"]
@@ -56,7 +55,9 @@ def transform_data(input_json):
         for measurement in station["measurements"]:
             if measurement["measurementType"] == "PM25":
                 measurement["measurementType"] = "PM2.5"
-        
+            # Asegura que station_name se añade correctamente a measurementDeterminedBy 
+            measurement["measurementDeterminedBy"] = f"AireCiudadano station {station['station_name']}"
+
         # Solo añadimos la estación si tiene mediciones en desired_measurements
         if station["measurements"]:
             output_data.append(station)
@@ -64,13 +65,12 @@ def transform_data(input_json):
     return output_data
 
 def get_measurement_unit(measurement_type):
-    # Define a mapping from measurement type to unit
+    # Define un mapeo de tipo de medición a unidad
     unit_mapping = {
         "PM25": "ug/m3",
         "Temperature": "°C",
         "Humidity": "%",
         "CO2": "ppm",
-        # Add other mappings as necessary
     }
     return unit_mapping.get(measurement_type, "")
 
@@ -84,18 +84,15 @@ if __name__ == "__main__":
 
     # Carga el JSON de la respuesta
     input_json = response.json()
-    #print("Trama de entrada:")
-    input_json_dumps = json.dumps(input_json, separators=(',', ':'))
-    #print(input_json_dumps)
-    #print("")
-    #print("")
 
     # Transforma los datos
     output_json = transform_data(input_json)
-    output_json_dumps = json.dumps(output_json, separators=(',', ':'))
 
     # Guarda el JSON de salida en un archivo
     with open("output.json", "w", encoding='utf-8') as outfile:
-        json.dump(output_json, outfile, indent=4, ensure_ascii=False, default=str)
+        json.dump(output_json, outfile, indent=4, ensure_ascii=False)
+
+    # Imprime el JSON de salida
+    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
     print("Trama de salida:")
     print(output_json_dumps)
