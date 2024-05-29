@@ -13,12 +13,9 @@ def transform_data(input_json, filter_inout=False):
     for entry in input_json["data"]:
         # Filtra los datos por "InOut" si filter_inout es True
         if filter_inout:
-            labels = entry.get("labels", {})
-            inout_value = next((label.get("value") for label in labels.values() if isinstance(label, dict) and label.get("key") == "InOut"), None)
-            print(f"Checking InOut value: {inout_value}")  # Depuración
-            if inout_value == "1":
-                print("Skipping entry due to InOut value being 1")  # Depuración
-                continue
+        # Verifica el valor de "InOut"
+            if "InOut" in entry and entry["InOut"]["metrics"][0]["value"] == "1":
+                continue  # No procesar esta entrada si InOut es "1"
 
         station = {
             "id": "",

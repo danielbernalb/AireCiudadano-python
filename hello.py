@@ -4,13 +4,19 @@ from flask import Flask
 
 app = Flask(__name__)
 
-def transform_data(input_json):
+def transform_data(input_json, filter_inout=False):
     output_data = []
 
     # Lista de tipos de medición que queremos incluir, en el orden deseado
     desired_measurements = ["PM25", "Temperature", "Humidity", "CO2"]
 
     for entry in input_json["data"]:
+        # Filtra los datos por "InOut" si filter_inout es True
+        if filter_inout:
+        # Verifica el valor de "InOut"
+            if "InOut" in entry and entry["InOut"]["metrics"][0]["value"] == "1":
+                continue  # No procesar esta entrada si InOut es "1"
+
         station = {
             "id": "",
             "station_name": "",
@@ -80,28 +86,23 @@ def get_measurement_unit(measurement_type):
 @app.route('/fixstationall', methods=['GET'])
 def fixstationall():
     # Define la URL del JSON de entrada
-    url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"  # Reemplaza con la URL real
-
-    # Realiza la solicitud HTTP para obtener el JSON
+    url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"
     response = requests.get(url)
     response.raise_for_status()  # Lanza una excepción si la solicitud falla
-
-    # Carga el JSON de la respuesta
     input_json = response.json()
-
-    # Transforma los datos
     output_json = transform_data(input_json)
-
-    # Guarda el JSON de salida en un archivo
-    #with open("output.json", "w", encoding='utf-8') as outfile:
-    #    json.dump(output_json, outfile, indent=4, ensure_ascii=False)
-
-    # Imprime el JSON de salida
     output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
-#    print("Trama de salida:")
-#    print(output_json_dumps)
-    # Responde con el JSON transformado
-#    return jsonify(output_json_dumps)
+    return output_json_dumps
+
+@app.route('/fixstations', methods=['GET'])
+def fixstationall_inout():
+    # Define la URL del JSON de entrada
+    url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"  # Reemplaza con la URL real
+    response = requests.get(url)
+    response.raise_for_status()  # Lanza una excepción si la solicitud falla
+    input_json = response.json()
+    output_json = transform_data(input_json, filter_inout=True)
+    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
     return output_json_dumps
 
 if __name__ == "__main__":
