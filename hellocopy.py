@@ -1,25 +1,13 @@
 import json
 import requests
-from flask import Flask
 
-app = Flask(__name__)
-
-def transform_data(input_json, filter_inout=False):
+def transform_data(input_json):
     output_data = []
 
     # Lista de tipos de medición que queremos incluir, en el orden deseado
     desired_measurements = ["PM25", "Temperature", "Humidity", "CO2"]
 
     for entry in input_json["data"]:
-        # Filtra los datos por "InOut" si filter_inout es True
-        if filter_inout:
-            labels = entry.get("labels", {})
-            inout_value = next((label.get("value") for label in labels.values() if isinstance(label, dict) and label.get("key") == "InOut"), None)
-            print(f"Checking InOut value: {inout_value}")  # Depuración
-            if inout_value == "1":
-                print("Skipping entry due to InOut value being 1")  # Depuración
-                continue
-
         station = {
             "id": "",
             "station_name": "",
@@ -67,7 +55,7 @@ def transform_data(input_json, filter_inout=False):
         for measurement in station["measurements"]:
             if measurement["measurementType"] == "PM25":
                 measurement["measurementType"] = "PM2.5"
-            # Asegura que station_name se añade correctamente a measurementDeterminedBy
+            # Asegura que station_name se añade correctamente a measurementDeterminedBy 
             measurement["measurementDeterminedBy"] = f"AireCiudadano station {station['station_name']}"
 
         # Solo añadimos la estación si tiene mediciones en desired_measurements
@@ -86,27 +74,25 @@ def get_measurement_unit(measurement_type):
     }
     return unit_mapping.get(measurement_type, "")
 
-@app.route('/fixstationall', methods=['GET'])
-def fixstationall():
-    # Define la URL del JSON de entrada
-    url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"
-    response = requests.get(url)
-    response.raise_for_status()  # Lanza una excepción si la solicitud falla
-    input_json = response.json()
-    output_json = transform_data(input_json)
-    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
-    return output_json_dumps
-
-@app.route('/fixstations', methods=['GET'])
-def fixstationall_inout():
+if __name__ == "__main__":
     # Define la URL del JSON de entrada
     url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"  # Reemplaza con la URL real
+
+    # Realiza la solicitud HTTP para obtener el JSON
     response = requests.get(url)
     response.raise_for_status()  # Lanza una excepción si la solicitud falla
-    input_json = response.json()
-    output_json = transform_data(input_json, filter_inout=True)
-    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
-    return output_json_dumps
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    # Carga el JSON de la respuesta
+    input_json = response.json()
+
+    # Transforma los datos
+    output_json = transform_data(input_json)
+
+    # Guarda el JSON de salida en un archivo
+    with open("output.json", "w", encoding='utf-8') as outfile:
+        json.dump(output_json, outfile, indent=4, ensure_ascii=False)
+
+    # Imprime el JSON de salida
+    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
+    print("Trama de salida:")
+    print(output_json_dumps)
