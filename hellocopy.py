@@ -8,6 +8,10 @@ def transform_data(input_json):
     desired_measurements = ["PM25", "Temperature", "Humidity", "CO2"]
 
     for entry in input_json["data"]:
+        # Verifica el valor de "InOut"
+        if "InOut" in entry and entry["InOut"]["metrics"][0]["value"] == "1":
+            continue  # No procesar esta entrada si InOut es "1"
+
         station = {
             "id": "",
             "station_name": "",
