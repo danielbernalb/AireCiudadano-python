@@ -97,7 +97,7 @@ def fixstationall():
 @app.route('/fixstations', methods=['GET'])
 def fixstationall_inout():
     # Define la URL del JSON de entrada
-    url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"  # Reemplaza con la URL real
+    url = "http://194.242.56.226:30991/api/v1/metrics"  # Reemplaza con la URL real
     response = requests.get(url)
     response.raise_for_status()  # Lanza una excepción si la solicitud falla
     input_json = response.json()
