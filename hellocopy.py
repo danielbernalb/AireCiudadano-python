@@ -86,7 +86,7 @@ def get_measurement_unit(measurement_type):
 @app.route('/fixstationall', methods=['GET'])
 def fixstationall():
     # Define la URL del JSON de entrada
-    url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"
+    url = "http://194.242.56.226:30991/api/v1/metrics"
     response = requests.get(url)
     response.raise_for_status()  # Lanza una excepción si la solicitud falla
     input_json = response.json()
