@@ -3,7 +3,7 @@ import json
 import datetime
 
 # Configuración de Prometheus
-prometheus_url = 'http://localhost:30991/api/v1/query_range'
+prometheus_url = 'http://localhost:30000/api/v1/query_range'
 metrics = ['PM25', 'PM25raw', 'PM1', 'humidity', 'temperature', 'RSSI', 'latitude', 'longitude', 'inout', 'configval', 'datavar1']
 start_time = '2024-06-01T00:00:00Z'
 end_time = '2024-06-02T00:00:00Z'
@@ -12,7 +12,7 @@ step = '60s'
 # Configuración de InfluxDB
 bucket = "BucketPrometheus"
 org = "AireCiudadano"
-token = "ozkDDiAMbzXcv3QhiksqowviQ-1GonMSD8hyGZiAes4fk6fKAReWsik12AJsB3HuZBmb3NHiBNr7io-DCNG5Sw"
+token = "tBeBf42TZ4mWmKe0Ac-s0PK5Tu_v-1LF4xL-lmcvwIcgEEjeCUFH2RB4yjuYFhTV2qeYzA3xCdZ6HVmfEsl1-w"
 url = "http://localhost:8086/api/v2/write?org=" + org + "&bucket=" + bucket + "&precision=s"
 
 headers = {
