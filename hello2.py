@@ -12,7 +12,7 @@ step = '60s'
 # Configuración de InfluxDB
 bucket = "BucketPrometheus"
 org = "AireCiudadano"
-token = "tBeBf42TZ4mWmKe0Ac-s0PK5Tu_v-1LF4xL-lmcvwIcgEEjeCUFH2RB4yjuYFhTV2qeYzA3xCdZ6HVmfEsl1-w"
+token = "$INFLUX_TOKEN"
 url = "http://localhost:8086/api/v2/write?org=" + org + "&bucket=" + bucket + "&precision=s"
 
 headers = {
