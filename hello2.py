@@ -29,7 +29,13 @@ def query_and_send(metric):
         'step': step
     }
     response = requests.get(prometheus_url, params=params)
-    data = response.json()
+    
+    try:
+        data = response.json()
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e.msg}")
+        print(f"Response content: {response.text}")
+        return
 
     if 'data' in data and 'result' in data['data']:
         points = []
@@ -44,7 +50,12 @@ def query_and_send(metric):
             response = requests.post(url, headers=headers, data=''.join(points))
             if response.status_code != 204:
                 print(f"Error enviando datos a InfluxDB: {response.text}")
+            else:
+                print(f"Datos de {metric} enviados exitosamente a InfluxDB.")
+    else:
+        print(f"No se encontraron datos para la métrica: {metric}")
 
 # Consultar y enviar datos para cada métrica
 for metric in metrics:
     query_and_send(metric)
+
