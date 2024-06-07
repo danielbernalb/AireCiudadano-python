@@ -36,7 +36,6 @@ headers = {
 
 # Función para obtener todos los IDs dinámicamente desde Prometheus
 def get_all_ids():
-    query = 'label_values(id)'
     response = requests.get(f'{prometheus_url}/label/id/values')
     
     try:
@@ -47,6 +46,7 @@ def get_all_ids():
         return []
 
     if 'data' in data:
+        print(f"IDs obtenidos: {data['data']}")
         return data['data']
     else:
         print(f"Error en la consulta de IDs: {response.text}")
@@ -71,6 +71,7 @@ def query_and_send(id, metric):
         return
 
     if 'data' in data and 'result' in data['data']:
+        print(f"Datos obtenidos para {metric} de {id}: {data['data']['result']}")
         points = []
         for result in data['data']['result']:
             for value in result['values']:
@@ -91,7 +92,13 @@ def query_and_send(id, metric):
 # Obtener todos los IDs
 ids = get_all_ids()
 
+# Verificar si se obtuvieron IDs
+if not ids:
+    print("No se encontraron IDs. Terminando el script.")
+    exit(1)
+
 # Consultar y enviar datos para cada métrica de cada estación
 for id in ids:
     for metric in metrics:
+        print(f"Consultando métrica {metric} para el ID {id}")
         query_and_send(id, metric)

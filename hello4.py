@@ -11,8 +11,8 @@ metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSS
 gmt_minus_5 = pytz.timezone('Etc/GMT+5')
 
 # Crear tiempos en GMT-5
-start_time_gmt5 = datetime.datetime(2024, 6, 4, 0, 0, 0, tzinfo=gmt_minus_5)
-end_time_gmt5 = datetime.datetime(2024, 6, 5, 0, 0, 0, tzinfo=gmt_minus_5)
+start_time_gmt5 = datetime.datetime(2024, 6, 2, 0, 0, 0, tzinfo=gmt_minus_5)
+end_time_gmt5 = datetime.datetime(2024, 6, 3, 0, 0, 0, tzinfo=gmt_minus_5)
 
 # Convertir tiempos a UTC
 start_time_utc = start_time_gmt5.astimezone(pytz.utc)
@@ -27,7 +27,7 @@ step = '1h'
 # Configuración de InfluxDB
 bucket = "promebu"
 org = "AireCiudadano"
-token = "Y13jp1cnrDi30QHBK6tujESBrQVwcdZcd-F3s9VGP_SWgRqRwRrsaAdhP6tORveOCzB7_qfweFRIFIx1-maQfw=="
+token = "JqKtOKy8fTRx5Ht2T9tmsZdV3mPRV3C30i5qjG0D4UbJ33_GiRODnLTMtif5vQI9IbAE69DAJrpVhsfz2Z2kTw=="
 url = f"http://localhost:8086/api/v2/write?org={org}&bucket={bucket}&precision=s"
 
 headers = {
