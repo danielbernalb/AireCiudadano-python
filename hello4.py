@@ -25,9 +25,9 @@ end_time = int(end_time_utc.timestamp())
 step = '1h'
 
 # Configuración de InfluxDB
-bucket = "BucketProme"
+bucket = "promebu"
 org = "AireCiudadano"
-token = "RwMO31ubucHoz349BavmHgJcsOOJ__jlBHOAOHx0MJbecAyf7BwsD2ScWOdiX3yuxlTzqXIqQBe1x1fq7H-9mA=="
+token = "$INFLUX_TOKEN"
 url = f"http://localhost:8086/api/v2/write?org={org}&bucket={bucket}&precision=s"
 
 headers = {
