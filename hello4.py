@@ -37,7 +37,7 @@ headers = {
 
 # Función para obtener todos los valores de exported_job dinámicamente desde Prometheus
 def get_all_exported_jobs():
-    response = requests.get(f'{prometheus_url}/label/exported_job/values')
+    response = requests.get(f'{prometheus_url}/series?match[]=CO2')
     
     if response.status_code != 200:
         print(f"Error HTTP al obtener exported_jobs: {response.status_code} {response.reason}")
@@ -52,8 +52,12 @@ def get_all_exported_jobs():
         return []
 
     if 'data' in data:
-        print(f"exported_jobs obtenidos: {data['data']}")
-        return data['data']
+        exported_jobs = set()
+        for series in data['data']:
+            if 'exported_job' in series:
+                exported_jobs.add(series['exported_job'])
+        print(f"exported_jobs obtenidos: {list(exported_jobs)}")
+        return list(exported_jobs)
     else:
         print(f"Error en la consulta de exported_jobs: {response.text}")
         return []
