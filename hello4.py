@@ -83,8 +83,10 @@ def check_exported_job_active(exported_job):
         return False
 
     if 'data' in data and 'result' in data['data'] and len(data['data']['result']) > 0:
+        print(f"exported_job activo: {exported_job}")
         return True
     else:
+        print(f"exported_job no activo: {exported_job}")
         return False
 
 # Función para consultar Prometheus y enviar a InfluxDB
@@ -139,7 +141,12 @@ if not exported_jobs:
     exit(1)
 
 # Filtrar exported_jobs que tienen datos en el rango de tiempo especificado
-active_exported_jobs = [job for job in exported_jobs if check_exported_job_active(job)]
+active_exported_jobs = []
+for job in exported_jobs:
+    if check_exported_job_active(job):
+        active_exported_jobs.append(job)
+
+print(f"exported_jobs activos en el rango de tiempo: {active_exported_jobs}")
 
 # Consultar y enviar datos para cada métrica de cada exported_job activo
 for exported_job in active_exported_jobs:
