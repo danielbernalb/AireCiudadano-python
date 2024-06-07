@@ -11,8 +11,8 @@ metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSS
 gmt_minus_5 = pytz.timezone('Etc/GMT+5')
 
 # Crear tiempos en GMT-5
-start_time_gmt5 = datetime.datetime(2024, 5, 29, 0, 0, 0, tzinfo=gmt_minus_5)
-end_time_gmt5 = datetime.datetime(2024, 5, 30, 0, 0, 0, tzinfo=gmt_minus_5)
+start_time_gmt5 = datetime.datetime(2024, 5, 12, 0, 0, 0, tzinfo=gmt_minus_5)
+end_time_gmt5 = datetime.datetime(2024, 5, 13, 0, 0, 0, tzinfo=gmt_minus_5)
 
 # Convertir tiempos a UTC
 start_time_utc = start_time_gmt5.astimezone(pytz.utc)
@@ -25,9 +25,9 @@ end_time = int(end_time_utc.timestamp())
 step = '1h'
 
 # Configuración de InfluxDB
-bucket = "BucketPrometheus"
+bucket = "BucketProme"
 org = "AireCiudadano"
-token = "FM20Yv1ivDNlGXI41v5us9mXKmVdRwtWikBNq5Hq6514kg9pgGKpJuFJ0VukqMmz4PYx_gQGW7bNfS6u1rewRA=="
+token = "RwMO31ubucHoz349BavmHgJcsOOJ__jlBHOAOHx0MJbecAyf7BwsD2ScWOdiX3yuxlTzqXIqQBe1x1fq7H-9mA=="
 url = f"http://localhost:8086/api/v2/write?org={org}&bucket={bucket}&precision=s"
 
 headers = {

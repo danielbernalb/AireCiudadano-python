@@ -27,7 +27,7 @@ step = '1h'
 # Configuración de InfluxDB
 bucket = "BucketProme"
 org = "AireCiudadano"
-token = "4q9UesYN8VZPBpvtj4CEiWuWx4QP14gAxyUj-tCEqJZDwbY8wkhMJlhUZj9IeJSgjbl0JC0MbZwHdaAygY9PQw=="
+token = "RwMO31ubucHoz349BavmHgJcsOOJ__jlBHOAOHx0MJbecAyf7BwsD2ScWOdiX3yuxlTzqXIqQBe1x1fq7H-9mA=="
 url = f"http://localhost:8086/api/v2/write?org={org}&bucket={bucket}&precision=s"
 
 headers = {
