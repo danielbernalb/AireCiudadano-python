@@ -4,6 +4,7 @@ import pytz
 
 # Configuración de Prometheus
 prometheus_url = 'http://localhost:30000/api/v1/query_range'
+ids = ['AireCiudadano_DBB_COBOGSML_01_2aac64', 'AireCiudadano_LasMarias_5d601', 'AireCiudadano_PACC_HYO_6d5388station1']  # Lista de IDs de las estaciones
 metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSSI', 'Latitude', 'Longitude', 'InOut', 'ConfigVal', 'PM25raw', 'NoisePeak', 'PM251', 'PM252', 'PM1', 'MAC', 'Var1', 'Var2']
 
 # Configuración de zona horaria GMT-5
@@ -24,33 +25,15 @@ end_time = int(end_time_utc.timestamp())
 step = '1h'
 
 # Configuración de InfluxDB
-bucket = "BucketProme"
+bucket = "BucketPrometheus"
 org = "AireCiudadano"
-token = "4q9UesYN8VZPBpvtj4CEiWuWx4QP14gAxyUj-tCEqJZDwbY8wkhMJlhUZj9IeJSgjbl0JC0MbZwHdaAygY9PQw=="
-url = "http://localhost:8086/api/v2/write?org=" + org + "&bucket=" + bucket + "&precision=s"
+token = "FM20Yv1ivDNlGXI41v5us9mXKmVdRwtWikBNq5Hq6514kg9pgGKpJuFJ0VukqMmz4PYx_gQGW7bNfS6u1rewRA=="
+url = f"http://localhost:8086/api/v2/write?org={org}&bucket={bucket}&precision=s"
 
 headers = {
     'Authorization': f'Token {token}',
     'Content-Type': 'text/plain; charset=utf-8'
 }
-
-# Función para obtener todos los IDs dinámicamente desde Prometheus
-def get_all_ids():
-    query = 'label_values(id)'
-    response = requests.get(f'{prometheus_url}/label/id/values')
-    
-    try:
-        data = response.json()
-    except json.JSONDecodeError as e:
-        print(f"Error decoding JSON: {e.msg}")
-        print(f"Response content: {response.text}")
-        return []
-
-    if 'data' in data:
-        return data['data']
-    else:
-        print(f"Error en la consulta de IDs: {response.text}")
-        return []
 
 # Función para consultar Prometheus y enviar a InfluxDB
 def query_and_send(id, metric):
@@ -61,7 +44,7 @@ def query_and_send(id, metric):
         'end': end_time,
         'step': step
     }
-    response = requests.get(f'{prometheus_url}/query_range', params=params)
+    response = requests.get(prometheus_url, params=params)
     
     try:
         data = response.json()
@@ -87,9 +70,6 @@ def query_and_send(id, metric):
                 print(f"Datos de {metric} para {id} enviados exitosamente a InfluxDB.")
     else:
         print(f"No se encontraron datos para la métrica: {metric} de la estación: {id}")
-
-# Obtener todos los IDs
-ids = get_all_ids()
 
 # Consultar y enviar datos para cada métrica de cada estación
 for id in ids:
