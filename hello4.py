@@ -35,9 +35,9 @@ headers = {
     'Content-Type': 'text/plain; charset=utf-8'
 }
 
-# Función para obtener todos los valores de exported_job dinámicamente desde Prometheus
+# Función para obtener todos los valores de exported_job desde Prometheus
 def get_all_exported_jobs():
-    response = requests.get(f'{prometheus_url}/series?match[]=CO2')
+    response = requests.get(f'{prometheus_url}/label/exported_job/values')
     
     if response.status_code != 200:
         print(f"Error HTTP al obtener exported_jobs: {response.status_code} {response.reason}")
@@ -52,15 +52,40 @@ def get_all_exported_jobs():
         return []
 
     if 'data' in data:
-        exported_jobs = set()
-        for series in data['data']:
-            if 'exported_job' in series:
-                exported_jobs.add(series['exported_job'])
-        print(f"exported_jobs obtenidos: {list(exported_jobs)}")
-        return list(exported_jobs)
+        exported_jobs = data['data']
+        print(f"exported_jobs obtenidos: {exported_jobs}")
+        return exported_jobs
     else:
         print(f"Error en la consulta de exported_jobs: {response.text}")
         return []
+
+# Función para verificar si un exported_job tiene datos en el rango de tiempo especificado
+def check_exported_job_active(exported_job):
+    query = f'up{{exported_job="{exported_job}"}}'
+    params = {
+        'query': query,
+        'start': start_time,
+        'end': end_time,
+        'step': step
+    }
+    response = requests.get(f'{prometheus_url}/query_range', params=params)
+    
+    if response.status_code != 200:
+        print(f"Error HTTP al verificar métrica up para el exported_job {exported_job}: {response.status_code} {response.reason}")
+        print(f"Response content: {response.text}")
+        return False
+
+    try:
+        data = response.json()
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e.msg}")
+        print(f"Response content: {response.text}")
+        return False
+
+    if 'data' in data and 'result' in data['data'] and len(data['data']['result']) > 0:
+        return True
+    else:
+        return False
 
 # Función para consultar Prometheus y enviar a InfluxDB
 def query_and_send(exported_job, metric):
@@ -113,8 +138,11 @@ if not exported_jobs:
     print("No se encontraron exported_jobs. Terminando el script.")
     exit(1)
 
-# Consultar y enviar datos para cada métrica de cada exported_job
-for exported_job in exported_jobs:
+# Filtrar exported_jobs que tienen datos en el rango de tiempo especificado
+active_exported_jobs = [job for job in exported_jobs if check_exported_job_active(job)]
+
+# Consultar y enviar datos para cada métrica de cada exported_job activo
+for exported_job in active_exported_jobs:
     for metric in metrics:
         print(f"Consultando métrica {metric} para el exported_job {exported_job}")
         query_and_send(exported_job, metric)
