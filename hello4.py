@@ -4,15 +4,15 @@ import pytz
 
 # Configuración de Prometheus
 prometheus_url = 'http://localhost:30000/api/v1/query_range'
-ids = ['AireCiudadano_DBB_COBOGSML_01_2aac64', 'AireCiudadano_LasMarias_5d601', 'AireCiudadano_PACC_HYO_6d5388station1']  # Lista de IDs de las estaciones
+ids = ['AireCiudadano_DBB_COBOGSML_01_2aac64']  # Lista de IDs de las estaciones
 metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSSI', 'Latitude', 'Longitude', 'InOut', 'ConfigVal', 'PM25raw', 'NoisePeak', 'PM251', 'PM252', 'PM1', 'MAC', 'Var1', 'Var2']
 
 # Configuración de zona horaria GMT-5
 gmt_minus_5 = pytz.timezone('Etc/GMT+5')
 
 # Crear tiempos en GMT-5
-start_time_gmt5 = datetime.datetime(2021, 1, 1, 0, 0, 0, tzinfo=gmt_minus_5)
-end_time_gmt5 = datetime.datetime(2024, 1, 1, 0, 0, 0, tzinfo=gmt_minus_5)
+start_time_gmt5 = datetime.datetime(2024, 5, 29, 0, 0, 0, tzinfo=gmt_minus_5)
+end_time_gmt5 = datetime.datetime(2024, 5, 30, 0, 0, 0, tzinfo=gmt_minus_5)
 
 # Convertir tiempos a UTC
 start_time_utc = start_time_gmt5.astimezone(pytz.utc)
