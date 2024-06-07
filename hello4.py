@@ -4,7 +4,7 @@ import pytz
 import json
 
 # Configuración de Prometheus
-prometheus_url = 'http://localhost:30000/api/v1/query_range'
+prometheus_url = 'http://localhost:30000/api/v1'
 metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSSI', 'Latitude', 'Longitude', 'InOut', 'ConfigVal', 'PM25raw', 'NoisePeak', 'PM251', 'PM252', 'PM1', 'MAC', 'Var1', 'Var2']
 
 # Configuración de zona horaria GMT-5
