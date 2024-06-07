@@ -1,6 +1,7 @@
 import requests
 import datetime
 import pytz
+import json
 
 # Configuración de Prometheus
 prometheus_url = 'http://localhost:30000/api/v1/query_range'
