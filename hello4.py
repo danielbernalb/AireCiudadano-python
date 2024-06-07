@@ -35,10 +35,15 @@ headers = {
     'Content-Type': 'text/plain; charset=utf-8'
 }
 
-# Función para obtener todos los IDs dinámicamente desde Prometheus
-def get_all_ids():
-    response = requests.get(f'{prometheus_url}/label/id/values')
+# Función para obtener todos los valores de exported_job dinámicamente desde Prometheus
+def get_all_exported_jobs():
+    response = requests.get(f'{prometheus_url}/label/exported_job/values')
     
+    if response.status_code != 200:
+        print(f"Error HTTP al obtener exported_jobs: {response.status_code} {response.reason}")
+        print(f"Response content: {response.text}")
+        return []
+
     try:
         data = response.json()
     except json.JSONDecodeError as e:
@@ -47,15 +52,15 @@ def get_all_ids():
         return []
 
     if 'data' in data:
-        print(f"IDs obtenidos: {data['data']}")
+        print(f"exported_jobs obtenidos: {data['data']}")
         return data['data']
     else:
-        print(f"Error en la consulta de IDs: {response.text}")
+        print(f"Error en la consulta de exported_jobs: {response.text}")
         return []
 
 # Función para consultar Prometheus y enviar a InfluxDB
-def query_and_send(id, metric):
-    query = f'{metric}{{id="{id}"}}'
+def query_and_send(exported_job, metric):
+    query = f'{metric}{{exported_job="{exported_job}"}}'
     params = {
         'query': query,
         'start': start_time,
@@ -64,6 +69,11 @@ def query_and_send(id, metric):
     }
     response = requests.get(f'{prometheus_url}/query_range', params=params)
     
+    if response.status_code != 200:
+        print(f"Error HTTP al consultar métrica {metric} para el exported_job {exported_job}: {response.status_code} {response.reason}")
+        print(f"Response content: {response.text}")
+        return
+
     try:
         data = response.json()
     except json.JSONDecodeError as e:
@@ -72,35 +82,35 @@ def query_and_send(id, metric):
         return
 
     if 'data' in data and 'result' in data['data']:
-        print(f"Datos obtenidos para {metric} de {id}: {data['data']['result']}")
+        print(f"Datos obtenidos para {metric} de {exported_job}: {data['data']['result']}")
         points = []
         for result in data['data']['result']:
             for value in result['values']:
                 timestamp, val = value
-                point = f"{metric},id={id} value={val} {int(float(timestamp))}\n"
+                point = f"{metric},exported_job={exported_job} value={val} {int(float(timestamp))}\n"
                 points.append(point)
         
         # Enviar datos a InfluxDB
         if points:
             response = requests.post(url, headers=headers, data=''.join(points))
             if response.status_code != 204:
-                print(f"Error enviando datos a InfluxDB: {response.text}")
+                print(f"Error enviando datos a InfluxDB: {response.status_code} {response.reason}")
+                print(f"Response content: {response.text}")
             else:
-                print(f"Datos de {metric} para {id} enviados exitosamente a InfluxDB.")
+                print(f"Datos de {metric} para {exported_job} enviados exitosamente a InfluxDB.")
     else:
-        print(f"No se encontraron datos para la métrica: {metric} de la estación: {id}")
+        print(f"No se encontraron datos para la métrica: {metric} del exported_job: {exported_job}")
 
-# Obtener todos los IDs
-ids = get_all_ids()
+# Obtener todos los exported_jobs
+exported_jobs = get_all_exported_jobs()
 
-# Verificar si se obtuvieron IDs
-if not ids:
-    print("No se encontraron IDs. Terminando el script.")
+# Verificar si se obtuvieron exported_jobs
+if not exported_jobs:
+    print("No se encontraron exported_jobs. Terminando el script.")
     exit(1)
 
-# Consultar y enviar datos para cada métrica de cada estación
-for id in ids:
+# Consultar y enviar datos para cada métrica de cada exported_job
+for exported_job in exported_jobs:
     for metric in metrics:
-        print(f"Consultando métrica {metric} para el ID {id}")
-        query_and_send(id, metric)
-        
+        print(f"Consultando métrica {metric} para el exported_job {exported_job}")
+        query_and_send(exported_job, metric)
