@@ -61,7 +61,7 @@ def get_all_exported_jobs():
 
 # Función para verificar si un exported_job tiene datos en el rango de tiempo especificado
 def check_exported_job_active(exported_job):
-    query = f'up{{exported_job="{exported_job}"}}'
+    query = f'PM25{{exported_job="{exported_job}"}}'
     params = {
         'query': query,
         'start': start_time,
@@ -71,7 +71,7 @@ def check_exported_job_active(exported_job):
     response = requests.get(f'{prometheus_url}/query_range', params=params)
     
     if response.status_code != 200:
-        print(f"Error HTTP al verificar métrica up para el exported_job {exported_job}: {response.status_code} {response.reason}")
+        print(f"Error HTTP al verificar métrica PM25 para el exported_job {exported_job}: {response.status_code} {response.reason}")
         print(f"Response content: {response.text}")
         return False
 
@@ -81,6 +81,8 @@ def check_exported_job_active(exported_job):
         print(f"Error decoding JSON: {e.msg}")
         print(f"Response content: {response.text}")
         return False
+
+    print(f"Response data for exported_job {exported_job}: {data}")
 
     if 'data' in data and 'result' in data['data'] and len(data['data']['result']) > 0:
         print(f"exported_job activo: {exported_job}")
