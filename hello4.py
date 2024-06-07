@@ -4,7 +4,6 @@ import pytz
 
 # Configuración de Prometheus
 prometheus_url = 'http://localhost:30000/api/v1/query_range'
-ids = ['AireCiudadano_DBB_COBOGSML_01_2aac64']  # Lista de IDs de las estaciones
 metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSSI', 'Latitude', 'Longitude', 'InOut', 'ConfigVal', 'PM25raw', 'NoisePeak', 'PM251', 'PM252', 'PM1', 'MAC', 'Var1', 'Var2']
 
 # Configuración de zona horaria GMT-5
@@ -35,6 +34,24 @@ headers = {
     'Content-Type': 'text/plain; charset=utf-8'
 }
 
+# Función para obtener todos los IDs dinámicamente desde Prometheus
+def get_all_ids():
+    response = requests.get(f'{prometheus_url}/label/id/values')
+    
+    try:
+        data = response.json()
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e.msg}")
+        print(f"Response content: {response.text}")
+        return []
+
+    if 'data' in data:
+        print(f"IDs obtenidos: {data['data']}")
+        return data['data']
+    else:
+        print(f"Error en la consulta de IDs: {response.text}")
+        return []
+
 # Función para consultar Prometheus y enviar a InfluxDB
 def query_and_send(id, metric):
     query = f'{metric}{{id="{id}"}}'
@@ -44,7 +61,7 @@ def query_and_send(id, metric):
         'end': end_time,
         'step': step
     }
-    response = requests.get(prometheus_url, params=params)
+    response = requests.get(f'{prometheus_url}/query_range', params=params)
     
     try:
         data = response.json()
@@ -54,6 +71,7 @@ def query_and_send(id, metric):
         return
 
     if 'data' in data and 'result' in data['data']:
+        print(f"Datos obtenidos para {metric} de {id}: {data['data']['result']}")
         points = []
         for result in data['data']['result']:
             for value in result['values']:
@@ -71,7 +89,17 @@ def query_and_send(id, metric):
     else:
         print(f"No se encontraron datos para la métrica: {metric} de la estación: {id}")
 
+# Obtener todos los IDs
+ids = get_all_ids()
+
+# Verificar si se obtuvieron IDs
+if not ids:
+    print("No se encontraron IDs. Terminando el script.")
+    exit(1)
+
 # Consultar y enviar datos para cada métrica de cada estación
 for id in ids:
     for metric in metrics:
+        print(f"Consultando métrica {metric} para el ID {id}")
         query_and_send(id, metric)
+        
