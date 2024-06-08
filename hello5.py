@@ -108,7 +108,9 @@ def query_and_send(exported_job, metric):
         for result in data['data']['result']:
             for value in result['values']:
                 timestamp, val = value
-                point = f"{metric},exported_job={exported_job} value={val} {int(float(timestamp))}\n"
+                # Escapar espacios en el exported_job
+                sanitized_exported_job = exported_job.replace(" ", "\\ ")
+                point = f"{metric},exported_job={sanitized_exported_job} value={val} {int(float(timestamp))}\n"
                 points.append(point)
         
         # Enviar datos a InfluxDB
