@@ -11,8 +11,8 @@ metrics = ['PM25', 'CO2', 'VOC', 'NOx', 'Humidity', 'Temperature', 'Noise', 'RSS
 gmt_minus_5 = pytz.timezone('Etc/GMT+5')
 
 # Crear tiempos en GMT-5
-start_time_gmt5 = datetime.datetime(2024, 5, 23, 0, 0, 0, tzinfo=gmt_minus_5)
-end_time_gmt5 = datetime.datetime(2024, 5, 24, 0, 0, 0, tzinfo=gmt_minus_5)
+start_time_gmt5 = datetime.datetime(2024, 5, 20, 0, 0, 0, tzinfo=gmt_minus_5)
+end_time_gmt5 = datetime.datetime(2024, 5, 21, 0, 0, 0, tzinfo=gmt_minus_5)
 
 # Convertir tiempos a UTC
 start_time_utc = start_time_gmt5.astimezone(pytz.utc)
