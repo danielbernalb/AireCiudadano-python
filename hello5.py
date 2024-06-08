@@ -131,9 +131,12 @@ if not exported_jobs:
     print("No se encontraron exported_jobs. Terminando el script.")
     exit(1)
 
+# Filtrar exported_jobs que contienen "prueba", "Prueba", "test" o "Test"
+filtered_exported_jobs = [job for job in exported_jobs if not any(word in job.lower() for word in ['prueba', 'test'])]
+
 # Filtrar exported_jobs que tienen datos en el rango de tiempo especificado
 active_exported_jobs = []
-for job in exported_jobs:
+for job in filtered_exported_jobs:
     if check_exported_job_active(job):
         active_exported_jobs.append(job)
 
