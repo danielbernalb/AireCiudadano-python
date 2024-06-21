@@ -22,7 +22,7 @@ end_time_utc = end_time_gmt5.astimezone(pytz.utc)
 start_time = int(start_time_utc.timestamp())
 end_time = int(end_time_utc.timestamp())
 
-step = '1h'
+step = '1m'
 
 # Configuración de InfluxDB
 bucket = "prome1"
@@ -118,8 +118,8 @@ def query_and_send(exported_job, metric):
             response = requests.post(url, headers=headers, data=''.join(points))
             if response.status_code != 204:
                 print(f"Error enviando datos a InfluxDB para {metric} de {exported_job}: {response.status_code} {response.reason}")
-            else:
-                print(f"Datos de {metric} para {exported_job} enviados exitosamente a InfluxDB.")
+            #else:
+            #    print(f"Datos de {metric} para {exported_job} enviados exitosamente a InfluxDB.")
     else:
         print(f"No se encontraron datos para la métrica {metric} del exported_job {exported_job}")
 
@@ -140,7 +140,7 @@ for job in filtered_exported_jobs:
     if check_exported_job_active(job):
         active_exported_jobs.append(job)
 
-print(f"exported_jobs activos en el rango de tiempo: {active_exported_jobs}")
+#print(f"exported_jobs activos en el rango de tiempo: {active_exported_jobs}")
 
 # Consultar y enviar datos para cada métrica de cada exported_job activo
 for exported_job in active_exported_jobs:
