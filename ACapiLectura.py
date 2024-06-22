@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 import requests
 import pandas as pd
 import datetime
@@ -98,6 +98,52 @@ def _get_step(number, choice):
     step = f"{number}{options[choice]}"
 
     return step
+
+@app.route('/apimenu')
+def index():
+    html = '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Aire Ciudadano</title>
+    </head>
+    <body>
+        <h1>Aire Ciudadano Data Retrieval</h1>
+        <form action="/api/data" method="get">
+            <label for="option">Select Option:</label><br>
+            <input type="radio" id="last_register" name="option" value="last_register" checked>
+            <label for="last_register">Last register</label><br>
+            <input type="radio" id="time_range" name="option" value="time_range">
+            <label for="time_range">Time range</label><br><br>
+
+            <label for="starts_day">Start Date:</label><br>
+            <input type="date" id="starts_day" name="starts_day" value="{{ today }}"><br><br>
+            <label for="starts_hour">Start Hour:</label><br>
+            <input type="time" id="starts_hour" name="starts_hour" value="00:00"><br><br>
+
+            <label for="ends_day">End Date:</label><br>
+            <input type="date" id="ends_day" name="ends_day" value="{{ today }}"><br><br>
+            <label for="ends_hour">End Hour:</label><br>
+            <input type="time" id="ends_hour" name="ends_hour" value="00:00"><br><br>
+
+            <label for="step_number">Step Number:</label><br>
+            <input type="number" id="step_number" name="step_number" value="1"><br><br>
+            <label for="step_option">Step Option:</label><br>
+            <select id="step_option" name="step_option">
+                <option value="seconds">Seconds</option>
+                <option value="minutes">Minutes</option>
+                <option value="hours" selected>Hours</option>
+                <option value="days">Days</option>
+                <option value="weeks">Weeks</option>
+                <option value="years">Years</option>
+            </select><br><br>
+
+            <input type="submit" value="Retrieve Data">
+        </form>
+    </body>
+    </html>
+    '''
+    return render_template_string(html, today=str(datetime.date.today()))
 
 @app.route('/apidata', methods=['GET'])
 def get_prometheus_data():
