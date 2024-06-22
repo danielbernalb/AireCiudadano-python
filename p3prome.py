@@ -74,6 +74,11 @@ def _wide_table(df, selected_cols):
         values='value'
     ).reset_index()
 
+    # Ensure all selected columns are present in the dataframe
+    for col in selected_cols:
+        if col not in df_result.columns:
+            df_result[col] = np.nan
+
     df_result = df_result[
         ['station', 'date', 'time'] + selected_cols
     ].reset_index(drop=True)
