@@ -1,3 +1,5 @@
+# API instalada en aireciudadano.com funcional desde 21 de junio de 2024
+
 import json
 import requests
 from flask import Flask, jsonify, make_response
@@ -88,11 +90,9 @@ def fixstationall():
     # Define la URL del JSON de entrada
     url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"
     response = requests.get(url)
-    response.raise_for_status()  # Lanza una excepción si la solicitud falla
+    response.raise_for_status()
     input_json = response.json()
     output_json = transform_data(input_json)
-#    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
-#    return output_json_dumps
     return make_response(jsonify(output_json), 200)
 
 @app.route('/fixstations', methods=['GET'])
@@ -100,12 +100,10 @@ def fixstationall_inout():
     # Define la URL del JSON de entrada
     url = "http://sensor.aireciudadano.com:30991/api/v1/metrics"
     response = requests.get(url)
-    response.raise_for_status()  # Lanza una excepción si la solicitud falla
+    response.raise_for_status()
     input_json = response.json()
     output_json = transform_data(input_json, filter_inout=True)
-#    output_json_dumps = json.dumps(output_json, separators=(',', ':'), ensure_ascii=False)
-#    return output_json_dumps
     return make_response(jsonify(output_json), 200)
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=8080)
