@@ -55,11 +55,13 @@ def get_data(url, selected_cols):
     # convert df to wide table
     df_result = _wide_table(df, selected_cols)
     
-    # set format and replace zero values in lat-lon columns
+    # set format and replace zero values in lat-lon columns if they are selected
     for col in selected_cols:
         df_result[col] = df_result[col].astype(float)
-    df_result['Latitude'].replace(0, np.nan, inplace=True)
-    df_result['Longitude'].replace(0, np.nan, inplace=True)
+    if 'Latitude' in df_result.columns:
+        df_result['Latitude'].replace(0, np.nan, inplace=True)
+    if 'Longitude' in df_result.columns:
+        df_result['Longitude'].replace(0, np.nan, inplace=True)
 
     return df_result
 
@@ -213,4 +215,4 @@ def get_prometheus_data():
         return jsonify({'status': 'error', 'message': str(error)}), 500
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5001)
