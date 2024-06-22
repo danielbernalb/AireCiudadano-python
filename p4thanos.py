@@ -4,7 +4,7 @@ import pandas as pd
 import datetime
 import numpy as np
 
-# constant
+# Constant
 selected_cols = [
     "PM25",
     "PM25raw",
@@ -103,8 +103,7 @@ def _get_step(number, choice):
 
 @app.route('/')
 def index():
-    variables = request.args.getlist('variables')
-    option = request.args.get('option', 'last_register')
+    variables = request.args.getlist('variables') or selected_cols
     start_date = request.args.get('start_date', '2024-09-05')
     start_time = request.args.get('start_time', '08:00')
     end_date = request.args.get('end_date', '2024-09-05')
@@ -122,10 +121,6 @@ def index():
                 <label for="{{ col }}">{{ col }}</label><br>
             {% endfor %}
             <br>
-            <input type="radio" id="last_register" name="option" value="last_register" {% if option == 'last_register' %}checked{% endif %}>
-            <label for="last_register">Last register</label><br>
-            <input type="radio" id="time_range" name="option" value="time_range" {% if option == 'time_range' %}checked{% endif %}>
-            <label for="time_range">Time range</label><br><br>
             <label for="start_date">Start date:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}"><br><br>
             <label for="start_time">Start time:</label>
@@ -154,37 +149,33 @@ def index():
                 }
             }
         </script>
-    ''', selected_cols=selected_cols, variables=variables, option=option, 
-        start_date=start_date, start_time=start_time, 
-        end_date=end_date, end_time=end_time, 
-        step_number=step_number, step_option=step_option)
+    ''', selected_cols=selected_cols, variables=variables, 
+       start_date=start_date, start_time=start_time, 
+       end_date=end_date, end_time=end_time, 
+       step_number=step_number, step_option=step_option)
 
 @app.route('/data', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    option = request.form['option']
     base_url = "http://194.242.56.226:30001/api/v1"
     query = '{job%3D"pushgateway"}'
 
-    if option == 'last_register':
-        url = f"{base_url}/query?query={query}"
-    else:
-        start_date = request.form['start_date']
-        start_time = request.form['start_time']
-        end_date = request.form['end_date']
-        end_time = request.form['end_time']
-        step_number = request.form['step_number']
-        step_option = request.form['step_option']
+    start_date = request.form['start_date']
+    start_time = request.form['start_time']
+    end_date = request.form['end_date']
+    end_time = request.form['end_time']
+    step_number = request.form['step_number']
+    step_option = request.form['step_option']
 
-        start_datetime = f"{start_date}T{start_time}:00Z"
-        end_datetime = f"{end_date}T{end_time}:00Z"
-        step = _get_step(step_number, step_option)
+    start_datetime = f"{start_date}T{start_time}:00Z"
+    end_datetime = f"{end_date}T{end_time}:00Z"
+    step = _get_step(step_number, step_option)
 
-        url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
-        return obs.to_json(orient='records')
+        return jsonify(obs.to_dict(orient='records'))
     except Exception as e:
         return jsonify({'error': str(e)})
 
