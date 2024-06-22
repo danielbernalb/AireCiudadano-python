@@ -105,16 +105,18 @@ def _get_step(number, choice):
 def index():
     variables = request.args.getlist('variables')
     option = request.args.get('option', 'last_register')
-    start_date = request.args.get('start_date', '')
-    start_time = request.args.get('start_time', '')
-    end_date = request.args.get('end_date', '')
-    end_time = request.args.get('end_time', '')
+    start_date = request.args.get('start_date', '2024-09-05')
+    start_time = request.args.get('start_time', '08:00')
+    end_date = request.args.get('end_date', '2024-09-05')
+    end_time = request.args.get('end_time', '10:00')
     step_number = request.args.get('step_number', '1')
     step_option = request.args.get('step_option', 'hours')
 
     return render_template_string('''
         <form action="/data" method="post">
             <label for="variables">Select variables:</label><br>
+            <input type="checkbox" id="select_all" onclick="toggle(this);">
+            <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
                 <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
                 <label for="{{ col }}">{{ col }}</label><br>
@@ -144,6 +146,14 @@ def index():
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
+        <script>
+            function toggle(source) {
+                checkboxes = document.getElementsByName('variables');
+                for (var i = 0, n = checkboxes.length; i < n; i++) {
+                    checkboxes[i].checked = source.checked;
+                }
+            }
+        </script>
     ''', selected_cols=selected_cols, variables=variables, option=option, 
         start_date=start_date, start_time=start_time, 
         end_date=end_date, end_time=end_time, 
@@ -179,4 +189,4 @@ def data():
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5000)
