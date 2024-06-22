@@ -119,6 +119,12 @@ def index():
             <input type="radio" id="step_stats" name="stats_option" value="step_stats">
             <label for="step_stats">Step Statistics</label><br><br>
 
+            <label for="selected_cols">Select Variables to Analyze:</label><br>
+            {% for col in selected_cols %}
+            <input type="checkbox" id="{{ col }}" name="selected_cols" value="{{ col }}" checked>
+            <label for="{{ col }}">{{ col }}</label><br>
+            {% endfor %}<br>
+
             <label for="starts_day">Start Date:</label><br>
             <input type="date" id="starts_day" name="starts_day" value="{{ today }}"><br><br>
             <label for="starts_hour">Start Hour:</label><br>
@@ -145,7 +151,7 @@ def index():
     </body>
     </html>
     '''
-    return render_template_string(html, today=str(datetime.date.today()))
+    return render_template_string(html, selected_cols=selected_cols, today=str(datetime.date.today()))
 
 @app.route('/api/data', methods=['GET'])
 def get_prometheus_data():
@@ -157,6 +163,7 @@ def get_prometheus_data():
     ends_hour = request.args.get('ends_hour', default='00:00', type=str)
     step_number = request.args.get('step_number', default=1, type=int)
     step_option = request.args.get('step_option', default='hours', type=str)
+    selected_vars = request.args.getlist('selected_cols')
 
     try:
         # query to get all data
@@ -176,32 +183,23 @@ def get_prometheus_data():
             url = f"http://sensor.aireciudadano.com:30000/api/v1/query_range?query={query}&start={start_datetime}&end={end_datetime}&step=1m"
         
         # get obs from API, using the url created before
-        obs = get_data(url, selected_cols)
+        obs = get_data(url, selected_vars)
 
         if stats_option == 'step_stats':
-            # Resample to desired step and calculate statistics
-            obs.set_index('timestamp', inplace=True)
-            resampled = obs.resample(step).agg({
-                'PM25': ['mean', 'max', 'min', 'last'],
-                'PM25raw': ['mean', 'max', 'min', 'last'],
-                'PM251': ['mean', 'max', 'min', 'last'],
-                'PM252': ['mean', 'max', 'min', 'last'],
-                'PM1': ['mean', 'max', 'min', 'last'],
-                'CO2': ['mean', 'max', 'min', 'last'],
-                'VOC': ['mean', 'max', 'min', 'last'],
-                'NOx': ['mean', 'max', 'min', 'last'],
-                'Humidity': ['mean', 'max', 'min', 'last'],
-                'Temperature': ['mean', 'max', 'min', 'last'],
-                'Noise': ['mean', 'max', 'min', 'last'],
-                'NoisePeak': ['mean', 'max', 'min', 'last'],
-                'RSSI': ['mean', 'max', 'min', 'last'],
-                'Latitude': ['mean', 'max', 'min', 'last'],
-                'Longitude': ['mean', 'max', 'min', 'last'],
-                'InOut': ['mean', 'max', 'min', 'last']
-            }).reset_index()
+            # Resample to desired step and calculate statistics per station
+            obs.set_index(['timestamp'], inplace=True)
+            resampled_list = []
+
+            for station, group in obs.groupby('station'):
+                resampled = group.resample(step, on='timestamp').agg({
+                    col: ['mean', 'max', 'min', 'last'] for col in selected_vars
+                }).reset_index()
+                resampled['station'] = station
+                resampled_list.append(resampled)
+
+            obs = pd.concat(resampled_list, axis=0)
             # Flatten the column MultiIndex
-            resampled.columns = ['_'.join(col).strip() for col in resampled.columns.values]
-            obs = resampled
+            obs.columns = ['_'.join(col).strip() if col[1] else col[0] for col in obs.columns.values]
 
         # convert dataframe to json
         data_json = obs.to_json(orient='records')
@@ -215,4 +213,4 @@ def get_prometheus_data():
         return jsonify({'status': 'error', 'message': str(error)}), 500
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5001)
+    app.run(host='0.0.0.0', port=5000)
