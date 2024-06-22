@@ -75,10 +75,12 @@ def _wide_table(df, selected_cols):
         values='value'
     ).reset_index()
 
-    df_result = df_result[
-        ['station', 'date', 'time'] + selected_cols
-    ].reset_index(drop=True)
+    all_cols = ['station', 'date', 'time'] + selected_cols
+    missing_cols = set(all_cols) - set(df_result.columns)
+    for col in missing_cols:
+        df_result[col] = np.nan
 
+    df_result = df_result[all_cols].reset_index(drop=True)
     df_result.columns.name = ""
 
     return df_result
@@ -87,7 +89,6 @@ def _wide_table(df, selected_cols):
 def _get_step(number, choice):
     # convert word to code
     options = {
-        "seconds": "s",
         "minutes": "m",
         "hours": "h",
         "days": "d",
@@ -102,40 +103,51 @@ def _get_step(number, choice):
 
 @app.route('/')
 def index():
+    variables = request.args.getlist('variables')
+    option = request.args.get('option', 'last_register')
+    start_date = request.args.get('start_date', '')
+    start_time = request.args.get('start_time', '')
+    end_date = request.args.get('end_date', '')
+    end_time = request.args.get('end_time', '')
+    step_number = request.args.get('step_number', '1')
+    step_option = request.args.get('step_option', 'hours')
+
     return render_template_string('''
         <form action="/data" method="post">
             <label for="variables">Select variables:</label><br>
-            <select id="variables" name="variables" multiple>
-                {% for col in selected_cols %}
-                    <option value="{{ col }}">{{ col }}</option>
-                {% endfor %}
-            </select><br><br>
-            <input type="radio" id="last_register" name="option" value="last_register">
+            {% for col in selected_cols %}
+                <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
+                <label for="{{ col }}">{{ col }}</label><br>
+            {% endfor %}
+            <br>
+            <input type="radio" id="last_register" name="option" value="last_register" {% if option == 'last_register' %}checked{% endif %}>
             <label for="last_register">Last register</label><br>
-            <input type="radio" id="time_range" name="option" value="time_range">
+            <input type="radio" id="time_range" name="option" value="time_range" {% if option == 'time_range' %}checked{% endif %}>
             <label for="time_range">Time range</label><br><br>
             <label for="start_date">Start date:</label>
-            <input type="date" id="start_date" name="start_date"><br><br>
+            <input type="date" id="start_date" name="start_date" value="{{ start_date }}"><br><br>
             <label for="start_time">Start time:</label>
-            <input type="time" id="start_time" name="start_time"><br><br>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}"><br><br>
             <label for="end_date">End date:</label>
-            <input type="date" id="end_date" name="end_date"><br><br>
+            <input type="date" id="end_date" name="end_date" value="{{ end_date }}"><br><br>
             <label for="end_time">End time:</label>
-            <input type="time" id="end_time" name="end_time"><br><br>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}"><br><br>
             <label for="step_number">Step number:</label>
-            <input type="number" id="step_number" name="step_number"><br><br>
+            <input type="number" id="step_number" name="step_number" value="{{ step_number }}"><br><br>
             <label for="step_option">Step option:</label>
             <select id="step_option" name="step_option">
-                <option value="seconds">Seconds</option>
-                <option value="minutes">Minutes</option>
-                <option value="hours">Hours</option>
-                <option value="days">Days</option>
-                <option value="weeks">Weeks</option>
-                <option value="years">Years</option>
+                <option value="minutes" {% if step_option == 'minutes' %}selected{% endif %}>Minutes</option>
+                <option value="hours" {% if step_option == 'hours' %}selected{% endif %}>Hours</option>
+                <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
+                <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
+                <option value="years" {% if step_option == 'years' %}selected{% endif %}>Years</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
-    ''', selected_cols=selected_cols)
+    ''', selected_cols=selected_cols, variables=variables, option=option, 
+        start_date=start_date, start_time=start_time, 
+        end_date=end_date, end_time=end_time, 
+        step_number=step_number, step_option=step_option)
 
 @app.route('/data', methods=['POST'])
 def data():
@@ -167,4 +179,4 @@ def data():
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(host='0.0.0.0', port=5001)
