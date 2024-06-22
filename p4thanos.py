@@ -35,13 +35,13 @@ def get_data(url, selected_cols):
     # list of values or single value in data response
     if 'values' in df.columns:
         df = df.explode('values')
-        df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).date())
-        df['time'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).time())
+        df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+        df['time'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).strftime('%H:%M:%S'))
         df['value'] = df['values'].apply(lambda x: x[1])
         df = df.drop(columns="values")
     elif 'value' in df.columns:
-        df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).date())
-        df['time'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).time())
+        df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+        df['time'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).strftime('%H:%M:%S'))
         df['value'] = df['value'].apply(lambda x: x[1])
     
     df = df.rename(columns={
@@ -175,9 +175,11 @@ def data():
 
     try:
         obs = get_data(url, variables)
-        return jsonify(obs.to_dict(orient='records'))
+        json_data = obs.to_dict(orient='records')
+        return jsonify(json_data)
     except Exception as e:
+        app.logger.error(f'Error: {str(e)}')
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)
