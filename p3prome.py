@@ -138,12 +138,19 @@ def index():
                 <option value="years">Years</option>
             </select><br><br>
 
+            <label for="variables">Select Variables to Analyze:</label><br>
+            <select id="variables" name="variables" multiple>
+                {% for col in selected_cols %}
+                <option value="{{ col }}">{{ col }}</option>
+                {% endfor %}
+            </select><br><br>
+
             <input type="submit" value="Retrieve Data">
         </form>
     </body>
     </html>
     '''
-    return render_template_string(html, today=str(datetime.date.today()))
+    return render_template_string(html, today=str(datetime.date.today()), selected_cols=selected_cols)
 
 @app.route('/api/data', methods=['GET'])
 def get_prometheus_data():
@@ -154,6 +161,11 @@ def get_prometheus_data():
     ends_hour = request.args.get('ends_hour', default='00:00', type=str)
     step_number = request.args.get('step_number', default=1, type=int)
     step_option = request.args.get('step_option', default='hours', type=str)
+    variables = request.args.getlist('variables')
+
+    # Si no se seleccionan variables, se usan todas las columnas por defecto
+    if not variables:
+        variables = selected_cols
 
     try:
         # query to get all data
@@ -161,7 +173,7 @@ def get_prometheus_data():
 
         # last registers selected
         if option == 'last_register':
-            url = f"http://sensor.aireciudadano.com:30000/api/v1/query?query={query}"
+            url = f"http://194.242.56.226:30001/api/v1/query?query={query}"
         # range of time selected
         elif option == 'time_range':
             # construct start_datetime
@@ -170,10 +182,10 @@ def get_prometheus_data():
             end_datetime = f"{ends_day}T{ends_hour}:00Z"
             # construct step                
             step = _get_step(step_number, step_option)
-            url = f"http://sensor.aireciudadano.com:30000/api/v1/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+            url = f"http://194.242.56.226:30001/api/v1/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
         
         # get obs from API, using the url created before
-        obs = get_data(url, selected_cols)
+        obs = get_data(url, variables)
         
         # convert dataframe to json
         data_json = obs.to_json(orient='records')
