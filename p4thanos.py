@@ -170,7 +170,7 @@ def get_thanos_data():
     starts_day = request.args.get('starts_day', default=str(datetime.date.today()), type=str)
     starts_hour = request.args.get('starts_hour', default='00:00', type=str)
     ends_day = request.args.get('ends_day', default=str(datetime.date.today()), type=str)
-    ends_hour = request.args.get('ends_hour', default='00:00', type:str)
+    ends_hour = request.args.get('ends_hour', default='00:00', type=str)
     step_number = request.args.get('step_number', default=1, type=int)
     step_option = request.args.get('step_option', default='hours', type=str)
     variables = request.args.getlist('variables')
@@ -219,3 +219,4 @@ def get_thanos_data():
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5001)
+       
