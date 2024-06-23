@@ -68,12 +68,16 @@ def get_data(url, selected_cols):
 
 # function to get wide table
 def _wide_table(df, selected_cols):
-    df_result = pd.pivot(
-        df, 
-        index=['station', 'date', 'time'], 
-        columns='metric_name', 
-        values='value'
-    ).reset_index()
+    try:
+        df_result = pd.pivot(
+            df, 
+            index=['station', 'date', 'time'], 
+            columns='metric_name', 
+            values='value'
+        ).reset_index()
+    except Exception as e:
+        app.logger.error(f'Pivot Error: {str(e)}')
+        raise
 
     all_cols = ['station', 'date', 'time'] + selected_cols
     missing_cols = set(all_cols) - set(df_result.columns)
@@ -176,7 +180,16 @@ def data():
     try:
         obs = get_data(url, variables)
         json_data = obs.to_dict(orient='records')
-        return jsonify(json_data)
+        
+        # Agrupar por 'station'
+        grouped_data = {}
+        for record in json_data:
+            station = record.pop('station')
+            if station not in grouped_data:
+                grouped_data[station] = []
+            grouped_data[station].append(record)
+        
+        return jsonify(grouped_data)
     except Exception as e:
         app.logger.error(f'Error: {str(e)}')
         return jsonify({'error': str(e)})
