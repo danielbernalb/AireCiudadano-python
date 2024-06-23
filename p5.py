@@ -1,8 +1,9 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
 import pandas as pd
 import datetime
 import numpy as np
+import os
 
 # Constant
 selected_cols = [
@@ -37,28 +38,26 @@ def get_data(url, selected_cols):
         if 'values' in df.columns:
             df = df.explode('values')
             df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-#            df['time'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).strftime('%H:%M:%S'))
             df['value'] = df['values'].apply(lambda x: x[1])
             df = df.drop(columns="values")
         elif 'value' in df.columns:
             df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-#            df['time'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).strftime('%H:%M:%S'))
             df['value'] = df['value'].apply(lambda x: x[1])
         
         df = df.rename(columns={
             "metric.__name__": "metric_name", 
             "metric.exported_job": "station",
         })
-        
+
         # remove columns not used
         df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
 
         # remove rows with no station provided
         df = df[df['station'].notnull()]
-        
+
         # convert df to wide table
         df_result = _wide_table(df, selected_cols)
-        
+
         # set format and replace zero values in lat-lon columns if they are in the selected columns
         for col in selected_cols:
             if col in df_result.columns:
@@ -77,14 +76,9 @@ def get_data(url, selected_cols):
 def _wide_table(df, selected_cols):
     try:
         df_result = pd.pivot(
-            df, 
-#            index=['station', 'date', 'time'], 
-            index=['station', 'date'], 
-            columns='metric_name', 
-            values='value'
-        ).reset_index()
-        
-#        all_cols = ['station', 'date', 'time'] + selected_cols
+            df,
+            index=['station', 'date'], columns='metric_name', values='value').reset_index()
+
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
         for col in missing_cols:
@@ -92,7 +86,7 @@ def _wide_table(df, selected_cols):
 
         df_result = df_result[all_cols].reset_index(drop=True)
         df_result.columns.name = ""
-        
+
         return df_result
     except Exception as e:
         app.logger.error(f'Pivot Error: {str(e)}')
@@ -108,7 +102,7 @@ def _get_step(number, choice):
         "weeks": "w",
         "years": "y",
     }
-    
+
     # construct expression for step
     step = f"{number}{options[choice]}"
     return step
@@ -137,7 +131,7 @@ def index():
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
             <input type="time" id="start_time" name="start_time" value="{{ start_time }}"><br><br>
-            <label for="end_date">End date/time :</label>
+            <label for="end_date">End date / time:</label>
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
             <label for="end_time"> / </label>
             <input type="time" id="end_time" name="end_time" value="{{ end_time }}"><br><br>
@@ -169,7 +163,7 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30001/api/v1"
+    base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
     start_date = request.form['start_date']
@@ -188,7 +182,7 @@ def data():
     try:
         obs = get_data(url, variables)
         json_data = obs.to_dict(orient='records')
-        
+
         # Agrupar por 'station'
         grouped_data = {}
         for record in json_data:
@@ -197,10 +191,15 @@ def data():
                 grouped_data[station] = []
             grouped_data[station].append(record)
         
-        return jsonify(grouped_data)
+        # Guardar JSON en un archivo
+        file_path = 'data_result.json'
+        with open(file_path, 'w') as f:
+            json.dump(grouped_data, f, indent=4)
+        
+        return send_file(file_path, as_attachment=True)
     except Exception as e:
-        app.logger.error(f'Error in data endpoint: {str(e)}')
+        app.logger.error(f'Error: {str(e)}')
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5000)
