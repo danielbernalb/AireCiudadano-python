@@ -5,24 +5,11 @@ import datetime
 import numpy as np
 import json
 
-# Constant
+# Constants
 selected_cols = [
-    "PM25",
-    "PM25raw",
-    "PM251",
-    "PM252",
-    "PM1",
-    "CO2",
-    "VOC",
-    "NOx",
-    "Humidity",
-    "Temperature",
-    "Noise",
-    "NoisePeak",
-    "RSSI",
-    "Latitude",
-    "Longitude",
-    "InOut",
+    "PM25", "PM25raw", "PM251", "PM252", "PM1", "CO2", "VOC", "NOx",
+    "Humidity", "Temperature", "Noise", "NoisePeak", "RSSI", "Latitude",
+    "Longitude", "InOut",
 ]
 
 # Flask application
@@ -34,7 +21,6 @@ def get_data(url, selected_cols):
         data = requests.get(url).json()['data']['result']
         df = pd.json_normalize(data)
 
-        # list of values or single value in data response
         if 'values' in df.columns:
             df = df.explode('values')
             df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
@@ -49,16 +35,11 @@ def get_data(url, selected_cols):
             "metric.exported_job": "station",
         })
 
-        # remove columns not used
         df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-
-        # remove rows with no station provided
         df = df[df['station'].notnull()]
 
-        # convert df to wide table
         df_result = _wide_table(df, selected_cols)
 
-        # set format and replace zero values in lat-lon columns if they are in the selected columns
         for col in selected_cols:
             if col in df_result.columns:
                 df_result[col] = df_result[col].astype(float)
@@ -72,36 +53,24 @@ def get_data(url, selected_cols):
         app.logger.error(f'Error in get_data: {str(e)}')
         raise
 
-# function to get wide table
+# Function to get wide table
 def _wide_table(df, selected_cols):
     try:
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
-
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
         for col in missing_cols:
             df_result[col] = np.nan
-
         df_result = df_result[all_cols].reset_index(drop=True)
         df_result.columns.name = ""
-
         return df_result
     except Exception as e:
         app.logger.error(f'Pivot Error: {str(e)}')
         raise
 
-# constructor of the step value for time range queries
+# Constructor of the step value for time range queries
 def _get_step(number, choice):
-    # convert word to code
-    options = {
-        "minutes": "m",
-        "hours": "h",
-        "days": "d",
-        "weeks": "w",
-        "years": "y",
-    }
-
-    # construct expression for step
+    options = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w", "years": "y"}
     return f"{number}{options[choice]}"
 
 @app.route('/getdata')
@@ -141,21 +110,20 @@ def index():
                 <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
                 <option value="years" {% if step_option == 'years' %}selected{% endif %}>Years</option>
+                <option value="average" {% if step_option == 'average' %}selected{% endif %}>Average</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
         <script>
             function toggle(source) {
                 checkboxes = document.getElementsByName('variables');
-                for (var i = 0, n = checkboxes.length; i < n; i++) {
+                for (var i = 0; i < checkboxes.length; i++) {
                     checkboxes[i].checked = source.checked;
                 }
             }
         </script>
-    ''', selected_cols=selected_cols, variables=variables,
-       start_date=start_date, start_time=start_time,
-       end_date=end_date, end_time=end_time,
-       step_number=step_number, step_option=step_option)
+    ''', selected_cols=selected_cols, variables=variables, start_date=start_date, start_time=start_time,
+       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -172,15 +140,23 @@ def data():
 
     start_datetime = f"{start_date}T{start_time}:00Z"
     end_datetime = f"{end_date}T{end_time}:00Z"
-    step = _get_step(step_number, step_option)
+
+    if step_option == 'average':
+        step = '1m'
+    else:
+        step = _get_step(step_number, step_option)
 
     url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
+        if step_option == 'average':
+            obs['date'] = pd.to_datetime(obs['date'])
+            resample_rule = f"{step_number}{step_option[0].upper()}"
+            obs = obs.set_index('date').resample(resample_rule).mean().reset_index()
+
         json_data = obs.to_dict(orient='records')
 
-        # Agrupar por 'station'
         grouped_data = {}
         for record in json_data:
             station = record.pop('station')
