@@ -159,7 +159,13 @@ def data():
         if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'])
             resample_rule = f"{step_number}{step_option[0].upper()}"
-            obs = obs.set_index('date').resample(resample_rule).mean().reset_index()
+            obs = obs.set_index('date')
+            
+            # Convert all columns to numeric, forcing errors to NaN
+            obs = obs.apply(pd.to_numeric, errors='coerce')
+            
+            # Resample and compute the mean
+            obs = obs.resample(resample_rule).mean().reset_index()
 
         json_data = obs.to_dict(orient='records')
 
