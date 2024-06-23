@@ -42,9 +42,9 @@ def get_data(url, selected_cols):
         elif 'value' in df.columns:
             df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
             df['value'] = df['value'].apply(lambda x: x[1])
-        
+
         df = df.rename(columns={
-            "metric.__name__": "metric_name", 
+            "metric.__name__": "metric_name",
             "metric.exported_job": "station",
         })
 
@@ -154,9 +154,9 @@ def index():
                 }
             }
         </script>
-    ''', selected_cols=selected_cols, variables=variables, 
-       start_date=start_date, start_time=start_time, 
-       end_date=end_date, end_time=end_time, 
+    ''', selected_cols=selected_cols, variables=variables,
+       start_date=start_date, start_time=start_time,
+       end_date=end_date, end_time=end_time,
        step_number=step_number, step_option=step_option)
 
 @app.route('/dataresult', methods=['POST'])
