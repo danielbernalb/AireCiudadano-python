@@ -42,21 +42,21 @@ def get_data(url, selected_cols):
         elif 'value' in df.columns:
             df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
             df['value'] = df['value'].apply(lambda x: x[1])
-        
+
         df = df.rename(columns={
-            "metric.__name__": "metric_name", 
+            "metric.__name__": "metric_name",
             "metric.exported_job": "station",
         })
-        
+
         # remove columns not used
         df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
 
         # remove rows with no station provided
         df = df[df['station'].notnull()]
-        
+
         # convert df to wide table
         df_result = _wide_table(df, selected_cols)
-        
+
         # set format and replace zero values in lat-lon columns if they are in the selected columns
         for col in selected_cols:
             if col in df_result.columns:
@@ -75,12 +75,9 @@ def get_data(url, selected_cols):
 def _wide_table(df, selected_cols):
     try:
         df_result = pd.pivot(
-            df, 
-            index=['station', 'date'], 
-            columns='metric_name', 
-            values='value'
-        ).reset_index()
-        
+            df,
+            index=['station', 'date'], columns='metric_name', values='value').reset_index()
+
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
         for col in missing_cols:
@@ -88,7 +85,7 @@ def _wide_table(df, selected_cols):
 
         df_result = df_result[all_cols].reset_index(drop=True)
         df_result.columns.name = ""
-        
+
         return df_result
     except Exception as e:
         app.logger.error(f'Pivot Error: {str(e)}')
@@ -104,21 +101,23 @@ def _get_step(number, choice):
         "weeks": "w",
         "years": "y",
     }
-    
+
     # construct expression for step
     step = f"{number}{options[choice]}"
     return step
 
-@app.route('/')
+@app.route('/getdata')
 def index():
     variables = request.args.getlist('variables') or selected_cols
-    start_datetime = request.args.get('start_datetime', '2024-05-09T08:00')
-    end_datetime = request.args.get('end_datetime', '2024-05-09T10:00')
+    start_date = request.args.get('start_date', '2024-05-09')
+    start_time = request.args.get('start_time', '08:00')
+    end_date = request.args.get('end_date', '2024-05-09')
+    end_time = request.args.get('end_time', '10:00')
     step_number = request.args.get('step_number', '1')
     step_option = request.args.get('step_option', 'hours')
 
     return render_template_string('''
-        <form action="/data" method="post">
+        <form action="/dataresult" method="post">
             <label for="variables">Select variables:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
@@ -127,10 +126,14 @@ def index():
                 <label for="{{ col }}">{{ col }}</label><br>
             {% endfor %}
             <br>
-            <label for="start_datetime">Start date and time:</label>
-            <input type="datetime-local" id="start_datetime" name="start_datetime" value="{{ start_datetime }}"><br><br>
-            <label for="end_datetime">End date and time:</label>
-            <input type="datetime-local" id="end_datetime" name="end_datetime" value="{{ end_datetime }}"><br><br>
+            <label for="start_date">Start date/time:</label>
+            <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+            <label for="start_time"> / </label>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}"><br><br>
+            <label for="end_date">End date/time:</label>
+            <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
+            <label for="end_time"> / </label>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}"><br><br>
             <label for="step_number">Step number:</label>
             <input type="number" id="step_number" name="step_number" value="{{ step_number }}"><br><br>
             <label for="step_option">Step option:</label>
@@ -151,29 +154,34 @@ def index():
                 }
             }
         </script>
-    ''', selected_cols=selected_cols, variables=variables, 
-       start_datetime=start_datetime, end_datetime=end_datetime, 
+    ''', selected_cols=selected_cols, variables=variables,
+       start_date=start_date, start_time=start_time,
+       end_date=end_date, end_time=end_time,
        step_number=step_number, step_option=step_option)
 
-@app.route('/data', methods=['POST'])
+@app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30001/api/v1"
+    base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
-    start_datetime = request.form['start_datetime']
-    end_datetime = request.form['end_datetime']
+    start_date = request.form['start_date']
+    start_time = request.form['start_time']
+    end_date = request.form['end_date']
+    end_time = request.form['end_time']
     step_number = request.form['step_number']
     step_option = request.form['step_option']
 
+    start_datetime = f"{start_date}T{start_time}:00Z"
+    end_datetime = f"{end_date}T{end_time}:00Z"
     step = _get_step(step_number, step_option)
 
-    url = f"{base_url}/query_range?query={query}&start={start_datetime}Z&end={end_datetime}Z&step={step}"
+    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
-        json_data = obs.drop(columns='time').to_dict(orient='records')
-        
+        json_data = obs.to_dict(orient='records')
+
         # Agrupar por 'station'
         grouped_data = {}
         for record in json_data:
@@ -181,11 +189,11 @@ def data():
             if station not in grouped_data:
                 grouped_data[station] = []
             grouped_data[station].append(record)
-        
+
         return jsonify(grouped_data)
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}')
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5000)
