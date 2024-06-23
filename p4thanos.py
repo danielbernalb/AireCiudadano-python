@@ -108,9 +108,9 @@ def _get_step(number, choice):
 @app.route('/')
 def index():
     variables = request.args.getlist('variables') or selected_cols
-    start_date = request.args.get('start_date', '2024-09-05')
+    start_date = request.args.get('start_date', '2024-05-09')
     start_time = request.args.get('start_time', '08:00')
-    end_date = request.args.get('end_date', '2024-09-05')
+    end_date = request.args.get('end_date', '2024-05-09')
     end_time = request.args.get('end_time', '10:00')
     step_number = request.args.get('step_number', '1')
     step_option = request.args.get('step_option', 'hours')
