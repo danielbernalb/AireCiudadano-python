@@ -166,6 +166,9 @@ def data():
             
             # Resample and compute the mean
             obs = obs.resample(resample_rule).mean().reset_index()
+            
+            # Convert the date column back to string
+            obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
         json_data = obs.to_dict(orient='records')
 
