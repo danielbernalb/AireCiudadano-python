@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import datetime
 import numpy as np
+import json
 
 # Constant
 selected_cols = [
@@ -74,9 +75,7 @@ def get_data(url, selected_cols):
 # function to get wide table
 def _wide_table(df, selected_cols):
     try:
-        df_result = pd.pivot(
-            df,
-            index=['station', 'date'], columns='metric_name', values='value').reset_index()
+        df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
 
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
@@ -103,8 +102,7 @@ def _get_step(number, choice):
     }
 
     # construct expression for step
-    step = f"{number}{options[choice]}"
-    return step
+    return f"{number}{options[choice]}"
 
 @app.route('/getdata')
 def index():
@@ -190,7 +188,7 @@ def data():
                 grouped_data[station] = []
             grouped_data[station].append(record)
 
-        return jsonify(grouped_data)
+        return jsonify(json.loads(json.dumps(grouped_data, separators=(',', ':'))))
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}')
         return jsonify({'error': str(e)})
