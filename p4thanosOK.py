@@ -133,13 +133,13 @@ def index():
                 <label for="{{ col }}">{{ col }}</label><br>
             {% endfor %}
             <br>
-            <label for="start_date">Start date:</label>
+            <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
-            <label for="start_time">  </label>
+            <label for="start_time"> / </label>
             <input type="time" id="start_time" name="start_time" value="{{ start_time }}"><br><br>
-            <label for="end_date">End date  :</label>
+            <label for="end_date">End date / time:</label>
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
-            <label for="end_time">  </label>
+            <label for="end_time"> / </label>
             <input type="time" id="end_time" name="end_time" value="{{ end_time }}"><br><br>
             <label for="step_number">Step number:</label>
             <input type="number" id="step_number" name="step_number" value="{{ step_number }}"><br><br>
