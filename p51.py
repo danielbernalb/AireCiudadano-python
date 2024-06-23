@@ -82,6 +82,7 @@ def index():
     end_time = request.args.get('end_time', '10:00')
     step_number = request.args.get('step_number', '1')
     step_option = request.args.get('step_option', 'hours')
+    aggregation_method = request.args.get('aggregation_method', 'step')
 
     return render_template_string('''
         <form action="/dataresult" method="post">
@@ -110,7 +111,11 @@ def index():
                 <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
                 <option value="years" {% if step_option == 'years' %}selected{% endif %}>Years</option>
-                <option value="average" {% if step_option == 'average' %}selected{% endif %}>Average</option>
+            </select><br><br>
+            <label for="aggregation_method">Aggregation method:</label>
+            <select id="aggregation_method" name="aggregation_method">
+                <option value="step" {% if aggregation_method == 'step' %}selected{% endif %}>Step</option>
+                <option value="average" {% if aggregation_method == 'average' %}selected{% endif %}>Average</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
@@ -123,7 +128,7 @@ def index():
             }
         </script>
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date, start_time=start_time,
-       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option)
+       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -137,11 +142,12 @@ def data():
     end_time = request.form['end_time']
     step_number = request.form['step_number']
     step_option = request.form['step_option']
+    aggregation_method = request.form['aggregation_method']
 
     start_datetime = f"{start_date}T{start_time}:00Z"
     end_datetime = f"{end_date}T{end_time}:00Z"
 
-    if step_option == 'average':
+    if aggregation_method == 'average':
         step = '1m'
     else:
         step = _get_step(step_number, step_option)
@@ -150,7 +156,7 @@ def data():
 
     try:
         obs = get_data(url, variables)
-        if step_option == 'average':
+        if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'])
             resample_rule = f"{step_number}{step_option[0].upper()}"
             obs = obs.set_index('date').resample(resample_rule).mean().reset_index()
