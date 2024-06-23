@@ -159,14 +159,14 @@ def data():
         if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'])
             resample_rule = f"{step_number}{step_option[0].upper()}"
-            obs = obs.set_index('date')
-            
+            obs.set_index(['station', 'date'], inplace=True)
+
             # Convert all columns to numeric, forcing errors to NaN
             obs = obs.apply(pd.to_numeric, errors='coerce')
-            
-            # Resample and compute the mean
-            obs = obs.resample(resample_rule).mean().reset_index()
-            
+
+            # Resample and compute the mean for each station
+            obs = obs.groupby('station').resample(resample_rule, level='date').mean().reset_index()
+
             # Convert the date column back to string
             obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
