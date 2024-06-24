@@ -175,7 +175,8 @@ def data():
 
         # Apply station filter
         if station_filter:
-            obs = obs[obs['station'].str.contains(station_filter)]
+            filter_keywords = station_filter.split(',')
+            obs = obs[obs['station'].apply(lambda x: any(keyword.strip() in x for keyword in filter_keywords))]
 
         json_data = obs.to_dict(orient='records')
 
