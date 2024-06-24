@@ -96,7 +96,7 @@ def index():
             {% endfor %}
             <br>
             <label for="station_filter">Station filter:</label>
-            <input type="text" id="station_filter" name="station_filter" value="{{ station_filter }}"><br><br>            
+            <input type="text" id="station_filter" name="station_filter" value="{{ station_filter }}"><br><br>
             <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
@@ -109,7 +109,7 @@ def index():
             <select id="aggregation_method" name="aggregation_method">
                 <option value="step" {% if aggregation_method == 'step' %}selected{% endif %}>Step</option>
                 <option value="average" {% if aggregation_method == 'average' %}selected{% endif %}>Average</option>
-            </select><br><br>            
+            </select><br><br>
             <label for="step_number">Step/Average number:</label>
             <input type="number" id="step_number" name="step_number" value="{{ step_number }}">
             <label for="step_option">Option:</label>
@@ -138,7 +138,7 @@ def data():
     base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
-    station_filter = request.form.get('station_filter', '') 
+    station_filter = request.form.get('station_filter', '')
     start_date = request.form['start_date']
     start_time = request.form['start_time']
     end_date = request.form['end_date']
