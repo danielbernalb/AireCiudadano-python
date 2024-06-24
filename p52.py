@@ -189,6 +189,9 @@ def data():
         total_pages = (total_records + page_size - 1) // page_size
         obs = obs.iloc[(page - 1) * page_size: page * page_size]
 
+        # Reemplazar NaN con null antes de convertir a JSON
+        obs = obs.where(pd.notnull(obs), None)
+
         json_data = obs.to_dict(orient='records')
 
         grouped_data = {}
