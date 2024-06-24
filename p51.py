@@ -76,6 +76,7 @@ def _get_step(number, choice):
 @app.route('/getdata')
 def index():
     variables = request.args.getlist('variables') or selected_cols
+    station_filter = request.args.get('station_filter', '')
     start_date = request.args.get('start_date', '2024-05-09')
     start_time = request.args.get('start_time', '08:00')
     end_date = request.args.get('end_date', '2024-05-09')
@@ -94,6 +95,8 @@ def index():
                 <label for="{{ col }}">{{ col }}</label><br>
             {% endfor %}
             <br>
+            <label for="station_filter">Station filter:</label>
+            <input type="text" id="station_filter" name="station_filter" value="{{ station_filter }}"><br><br>            
             <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
@@ -102,20 +105,19 @@ def index():
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
             <label for="end_time"> / </label>
             <input type="time" id="end_time" name="end_time" value="{{ end_time }}"><br><br>
-            <label for="step_number">Step number:</label>
-            <input type="number" id="step_number" name="step_number" value="{{ step_number }}"><br><br>
-            <label for="step_option">Step option:</label>
+            <label for="aggregation_method">Aggregation method:</label>
+            <select id="aggregation_method" name="aggregation_method">
+                <option value="step" {% if aggregation_method == 'step' %}selected{% endif %}>Step</option>
+                <option value="average" {% if aggregation_method == 'average' %}selected{% endif %}>Average</option>
+            </select><br><br>            
+            <label for="step_number">Step/Average number:</label>
+            <input type="number" id="step_number" name="step_number" value="{{ step_number }}">
+            <label for="step_option">Option:</label>
             <select id="step_option" name="step_option">
                 <option value="minutes" {% if step_option == 'minutes' %}selected{% endif %}>Minutes</option>
                 <option value="hours" {% if step_option == 'hours' %}selected{% endif %}>Hours</option>
                 <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
-                <option value="years" {% if step_option == 'years' %}selected{% endif %}>Years</option>
-            </select><br><br>
-            <label for="aggregation_method">Aggregation method:</label>
-            <select id="aggregation_method" name="aggregation_method">
-                <option value="step" {% if aggregation_method == 'step' %}selected{% endif %}>Step</option>
-                <option value="average" {% if aggregation_method == 'average' %}selected{% endif %}>Average</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
@@ -128,7 +130,7 @@ def index():
             }
         </script>
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date, start_time=start_time,
-       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method)
+       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method, station_filter=station_filter)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -136,6 +138,7 @@ def data():
     base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
+    station_filter = request.form.get('station_filter', '') 
     start_date = request.form['start_date']
     start_time = request.form['start_time']
     end_date = request.form['end_date']
@@ -169,6 +172,10 @@ def data():
 
             # Convert the date column back to string
             obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # Apply station filter
+        if station_filter:
+            obs = obs[obs['station'].str.contains(station_filter)]
 
         json_data = obs.to_dict(orient='records')
 
