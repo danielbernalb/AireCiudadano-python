@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 # Get data from API asynchronously with caching
 @alru_cache(maxsize=32)
-async def get_data(url, selected_cols):
+async def get_data(url, selected_cols_str):
     async with aiohttp.ClientSession() as session:
         for attempt in range(3):  # Reintentar hasta 3 veces
             try:
@@ -170,10 +170,11 @@ async def data():
     if (end_dt - start_dt).days > 7:
         return jsonify({'error': 'The date range cannot exceed 7 days'})
 
+    selected_cols_str = ','.join(selected_cols)
     url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
-        obs = await get_data(url, variables)
+        obs = await get_data(url, selected_cols_str)
 
         if station_filter:
             obs = obs[obs['station'].str.contains(station_filter)]
