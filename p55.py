@@ -82,6 +82,7 @@ def index():
     end_time = request.args.get('end_time', '10:00')
     step_number = request.args.get('step_number', '1')
     step_option = request.args.get('step_option', 'hours')
+    station_filter = request.args.get('station_filter', '')
     aggregation_method = request.args.get('aggregation_method', 'step')
 
     return render_template_string('''
@@ -207,4 +208,4 @@ def data():
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
