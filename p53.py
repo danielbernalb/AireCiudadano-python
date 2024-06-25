@@ -5,6 +5,7 @@ import numpy as np
 import json
 import aiohttp
 import asyncio
+from aiomcache import Client
 
 # Constants
 selected_cols = [
@@ -16,42 +17,51 @@ selected_cols = [
 # Flask application
 app = Flask(__name__)
 
+# Cache client
+cache = Client("127.0.0.1", 11211)
+
 # Get data from API asynchronously
 async def get_data(url, selected_cols):
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            data = await response.json()
-            data = data['data']['result']
-            df = pd.json_normalize(data)
+        for attempt in range(3):  # Reintentar hasta 3 veces
+            try:
+                async with session.get(url, timeout=60) as response:
+                    data = await response.json()
+                    data = data['data']['result']
+                    df = pd.json_normalize(data)
 
-            if 'values' in df.columns:
-                df = df.explode('values')
-                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['values'].apply(lambda x: x[1])
-                df = df.drop(columns="values")
-            elif 'value' in df.columns:
-                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['value'].apply(lambda x: x[1])
+                    if 'values' in df.columns:
+                        df = df.explode('values')
+                        df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                        df['value'] = df['values'].apply(lambda x: x[1])
+                        df = df.drop(columns="values")
+                    elif 'value' in df.columns:
+                        df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                        df['value'] = df['value'].apply(lambda x: x[1])
 
-            df = df.rename(columns={
-                "metric.__name__": "metric_name",
-                "metric.exported_job": "station",
-            })
+                    df = df.rename(columns={
+                        "metric.__name__": "metric_name",
+                        "metric.exported_job": "station",
+                    })
 
-            df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-            df = df[df['station'].notnull()]
+                    df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+                    df = df[df['station'].notnull()]
 
-            df_result = _wide_table(df, selected_cols)
+                    df_result = _wide_table(df, selected_cols)
 
-            for col in selected_cols:
-                if col in df_result.columns:
-                    df_result[col] = df_result[col].astype(float)
-            if 'Latitude' in df_result.columns:
-                df_result['Latitude'].replace(0, np.nan, inplace=True)
-            if 'Longitude' in df_result.columns:
-                df_result['Longitude'].replace(0, np.nan, inplace=True)
+                    for col in selected_cols:
+                        if col in df_result.columns:
+                            df_result[col] = df_result[col].astype(float)
+                    if 'Latitude' in df_result.columns:
+                        df_result['Latitude'].replace(0, np.nan, inplace=True)
+                    if 'Longitude' in df_result.columns:
+                        df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-            return df_result
+                    return df_result
+            except aiohttp.ClientError as e:
+                app.logger.error(f'Request failed: {str(e)}, retrying...')
+                await asyncio.sleep(2)  # Esperar antes de reintentar
+        raise Exception('Max retries exceeded')
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
@@ -72,7 +82,6 @@ def _get_step(number, choice):
 @app.route('/getdata')
 def index():
     variables = request.args.getlist('variables') or selected_cols
-    station_filter = request.args.get('station_filter', '')
     start_date = request.args.get('start_date', '2024-05-09')
     start_time = request.args.get('start_time', '08:00')
     end_date = request.args.get('end_date', '2024-05-09')
@@ -91,8 +100,6 @@ def index():
                 <label for="{{ col }}">{{ col }}</label><br>
             {% endfor %}
             <br>
-            <label for="station_filter">Station Filter:</label>
-            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
             <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
@@ -115,6 +122,8 @@ def index():
                 <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
             </select><br><br>
+            <label for="station_filter">Station Filter:</label>
+            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
             <label for="page">Page:</label>
             <input type="number" id="page" name="page" value="1"><br><br>
             <label for="page_size">Page Size:</label>
@@ -145,31 +154,38 @@ async def data():
     step_number = request.form['step_number']
     step_option = request.form['step_option']
     aggregation_method = request.form['aggregation_method']
-    station_filter = request.form['station_filter']
-    page = int(request.form.get('page', 1))
-    page_size = int(request.form.get('page_size', 100))
+    station_filter = request.form.get('station_filter', '')
+    page = int(request.form.get('page', '1'))
+    page_size = int(request.form.get('page_size', '100'))
 
-    # Limit the range of dates to prevent large queries
     start_datetime = f"{start_date}T{start_time}:00Z"
     end_datetime = f"{end_date}T{end_time}:00Z"
-    date_range = pd.to_datetime(end_datetime) - pd.to_datetime(start_datetime)
-
-    if date_range > pd.Timedelta(days=7):
-        return jsonify({'error': 'The date range is too large. Please select a range within 7 days.'})
 
     if aggregation_method == 'average':
         step = '1m'
     else:
         step = _get_step(step_number, step_option)
 
+    # Limit the time range to avoid overwhelming the server
+    start_dt = datetime.datetime.fromisoformat(start_datetime[:-1])
+    end_dt = datetime.datetime.fromisoformat(end_datetime[:-1])
+    if (end_dt - start_dt).days > 7:
+        return jsonify({'error': 'The date range cannot exceed 7 days'})
+
     url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
-        obs = await get_data(url, variables)
+        # Try to get data from cache
+        cache_key = f"{url}:{','.join(variables)}"
+        cached_data = await cache.get(cache_key.encode())
+        if cached_data:
+            obs = pd.read_json(cached_data.decode())
+        else:
+            obs = await get_data(url, variables)
+            await cache.set(cache_key.encode(), obs.to_json().encode(), exptime=600)  # Cache for 10 minutes
 
         if station_filter:
-            filters = station_filter.split(',')
-            obs = obs[obs['station'].str.contains('|'.join(filters))]
+            obs = obs[obs['station'].str.contains(station_filter)]
 
         if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'])
