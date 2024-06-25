@@ -87,12 +87,14 @@ async def get_data(query, start_datetime, end_datetime, step):
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
-    df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
-    all_cols = ['station', 'date'] + selected_cols
-    missing_cols = set(all_cols) - set(df_result.columns)
-    for col in missing_cols:
-        df_result[col] = np.nan
-    df_result = df_result[all_cols].reset_index(drop=True)
+    df_grouped = df.groupby(['station', 'date', 'metric_name']).first()['value'].unstack().reset_index()
+    df_result = pd.DataFrame(columns=['station', 'date'] + selected_cols)
+    df_result[['station', 'date']] = df_grouped[['station', 'date']]
+    for col in selected_cols:
+        if col in df_grouped.columns:
+            df_result[col] = df_grouped[col]
+        else:
+            df_result[col] = np.nan
     df_result.columns.name = ""
     return df_result
 
@@ -166,17 +168,16 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 async def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30000/api/v1"
-    query = '{job="pushgateway"}'
+    base_url = "http://194.242.56.226:30000/api/v1/query_range"
 
-    start_date = request.form['start_date']
-    start_time = request.form['start_time']
-    end_date = request.form['end_date']
-    end_time = request.form['end_time']
-    step_number = request.form['step_number']
-    step_option = request.form['step_option']
-    aggregation_method = request.form['aggregation_method']
-    station_filter = request.form.get('station_filter', '')
+    start_date = request.form.get('start_date', '2024-05-09')
+    start_time = request.form.get('start_time', '08:00')
+    end_date = request.form.get('end_date', '2024-05-09')
+    end_time = request.form.get('end_time', '10:00')
+    step_number = request.form.get('step_number', '1')
+    step_option = request.form.get('step_option', 'hours')
+    aggregation_method = request.form.get('aggregation_method', 'step')
+    station_filter = request.form.get('station_filter')
     page = int(request.form.get('page', '1'))
     page_size = int(request.form.get('page_size', '100'))
 
