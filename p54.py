@@ -168,8 +168,6 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 async def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30000/api/v1/query_range"
-
     start_date = request.form.get('start_date', '2024-05-09')
     start_time = request.form.get('start_time', '08:00')
     end_date = request.form.get('end_date', '2024-05-09')
@@ -190,7 +188,7 @@ async def data():
     if days > 7:
         return jsonify({'error': 'The date range cannot exceed 7 days'})
 
-    selected_cols_str = ','.join(selected_cols)
+    query = 'up'
     try:
         obs = await get_data(query, start_datetime, end_datetime, step)
 
