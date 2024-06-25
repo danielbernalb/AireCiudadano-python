@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 # Function to fetch Prometheus data asynchronously
 async def fetch_prometheus_data(session, query, start, end, step='1m'):
-    url = 'http://<prometheus_url>/api/v1/query_range'
+    url = 'http://194.242.56.226:30000/api/v1/query_range'  # Replace with your Prometheus URL
     params = {
         'query': query,
         'start': start,
@@ -167,7 +167,7 @@ def index():
 async def data():
     variables = request.form.getlist('variables')
     base_url = "http://194.242.56.226:30000/api/v1"
-    query = '{job%3D"pushgateway"}'
+    query = '{job="pushgateway"}'
 
     start_date = request.form['start_date']
     start_time = request.form['start_time']
