@@ -17,49 +17,73 @@ selected_cols = [
 # Flask application
 app = Flask(__name__)
 
-# Get data from API asynchronously with caching
+# Function to fetch Prometheus data asynchronously
+async def fetch_prometheus_data(session, query, start, end, step='1m'):
+    url = 'http://<prometheus_url>/api/v1/query_range'
+    params = {
+        'query': query,
+        'start': start,
+        'end': end,
+        'step': step
+    }
+    try:
+        async with session.get(url, params=params) as response:
+            response.raise_for_status()
+            data = await response.json()
+            return data
+    except aiohttp.ClientError as e:
+        app.logger.error(f"Error fetching data from Prometheus: {e}")
+        return None
+
+# Function to get data from API asynchronously with caching
 @alru_cache(maxsize=32)
-async def get_data(url, selected_cols_str):
+async def get_data(query, start_datetime, end_datetime, step):
     async with aiohttp.ClientSession() as session:
-        for attempt in range(3):  # Reintentar hasta 3 veces
-            try:
-                async with session.get(url, timeout=60) as response:
-                    data = await response.json()
-                    data = data['data']['result']
-                    df = pd.json_normalize(data)
+        tasks = []
+        current_time = start_datetime
+        while current_time < end_datetime:
+            next_time = current_time + datetime.timedelta(hours=1)
+            tasks.append(fetch_prometheus_data(session, query, current_time.timestamp(), next_time.timestamp(), step))
+            current_time = next_time
 
-                    if 'values' in df.columns:
-                        df = df.explode('values')
-                        df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                        df['value'] = df['values'].apply(lambda x: x[1])
-                        df = df.drop(columns="values")
-                    elif 'value' in df.columns:
-                        df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                        df['value'] = df['value'].apply(lambda x: x[1])
+        results = await asyncio.gather(*tasks)
+        all_data = []
+        for result in results:
+            if result and 'data' in result:
+                all_data.extend(result['data']['result'])
 
-                    df = df.rename(columns={
-                        "metric.__name__": "metric_name",
-                        "metric.exported_job": "station",
-                    })
+        if not all_data:
+            return pd.DataFrame()
 
-                    df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-                    df = df[df['station'].notnull()]
+        df = pd.json_normalize(all_data)
+        if 'values' in df.columns:
+            df = df.explode('values')
+            df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+            df['value'] = df['values'].apply(lambda x: x[1])
+            df = df.drop(columns="values")
+        elif 'value' in df.columns:
+            df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+            df['value'] = df['value'].apply(lambda x: x[1])
 
-                    df_result = _wide_table(df, selected_cols)
+        df = df.rename(columns={
+            "metric.__name__": "metric_name",
+            "metric.exported_job": "station",
+        })
 
-                    for col in selected_cols:
-                        if col in df_result.columns:
-                            df_result[col] = df_result[col].astype(float)
-                    if 'Latitude' in df_result.columns:
-                        df_result['Latitude'].replace(0, np.nan, inplace=True)
-                    if 'Longitude' in df_result.columns:
-                        df_result['Longitude'].replace(0, np.nan, inplace=True)
+        df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+        df = df[df['station'].notnull()]
 
-                    return df_result
-            except aiohttp.ClientError as e:
-                app.logger.error(f'Request failed: {str(e)}, retrying...')
-                await asyncio.sleep(2)  # Esperar antes de reintentar
-        raise Exception('Max retries exceeded')
+        df_result = _wide_table(df, selected_cols)
+
+        for col in selected_cols:
+            if col in df_result.columns:
+                df_result[col] = df_result[col].astype(float)
+        if 'Latitude' in df_result.columns:
+            df_result['Latitude'].replace(0, np.nan, inplace=True)
+        if 'Longitude' in df_result.columns:
+            df_result['Longitude'].replace(0, np.nan, inplace=True)
+
+        return df_result
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
@@ -156,25 +180,18 @@ async def data():
     page = int(request.form.get('page', '1'))
     page_size = int(request.form.get('page_size', '100'))
 
-    start_datetime = f"{start_date}T{start_time}:00Z"
-    end_datetime = f"{end_date}T{end_time}:00Z"
+    start_datetime = datetime.datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+    end_datetime = datetime.datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
+    step = _get_step(step_number, step_option)
 
-    if aggregation_method == 'average':
-        step = '1m'
-    else:
-        step = _get_step(step_number, step_option)
-
-    # Limit the time range to avoid overwhelming the server
-    start_dt = datetime.datetime.fromisoformat(start_datetime[:-1])
-    end_dt = datetime.datetime.fromisoformat(end_datetime[:-1])
-    if (end_dt - start_dt).days > 7:
+    delta = end_datetime - start_datetime
+    days = delta.total_seconds() / 86400
+    if days > 7:
         return jsonify({'error': 'The date range cannot exceed 7 days'})
 
     selected_cols_str = ','.join(selected_cols)
-    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
-
     try:
-        obs = await get_data(url, selected_cols_str)
+        obs = await get_data(query, start_datetime, end_datetime, step)
 
         if station_filter:
             obs = obs[obs['station'].str.contains(station_filter)]
