@@ -146,12 +146,6 @@ def index():
                 <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
             </select><br><br>
-            <label for="station_filter">Station Filter:</label>
-            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
-            <label for="page">Page:</label>
-            <input type="number" id="page" name="page" value="1"><br><br>
-            <label for="page_size">Page Size:</label>
-            <input type="number" id="page_size" name="page_size" value="100"><br><br>
             <input type="submit" value="Submit">
         </form>
         <script>
@@ -175,9 +169,6 @@ async def data():
     step_number = request.form.get('step_number', '1')
     step_option = request.form.get('step_option', 'hours')
     aggregation_method = request.form.get('aggregation_method', 'step')
-    station_filter = request.form.get('station_filter')
-    page = int(request.form.get('page', '1'))
-    page_size = int(request.form.get('page_size', '100'))
 
     start_datetime = datetime.datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
     end_datetime = datetime.datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
@@ -188,20 +179,9 @@ async def data():
     if days > 7:
         return jsonify({'error': 'The date range cannot exceed 7 days'})
 
-    query = 'up'
+    query = 'up'  # Replace with your Prometheus query
     try:
         obs = await get_data(query, start_datetime, end_datetime, step)
-
-        if station_filter:
-            obs = obs[obs['station'].str.contains(station_filter)]
-
-        if aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'])
-            resample_rule = f"{step_number}{step_option[0].upper()}"
-            obs.set_index(['station', 'date'], inplace=True)
-            obs = obs.apply(pd.to_numeric, errors='coerce')
-            obs = obs.groupby('station').resample(resample_rule, level='date').mean().reset_index()
-            obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 
         total_records = obs.shape[0]
         total_pages = (total_records + page_size - 1) // page_size
