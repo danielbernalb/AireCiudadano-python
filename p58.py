@@ -179,9 +179,19 @@ def data():
             end_time = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
-                current_time = start_time.replace(minute=0, second=0, microsecond=0)
-                if current_time < start_time:
+                current_time = start_time
+                if current_time < start_time.replace(minute=0, second=0, microsecond=0):
                     current_time = current_time + pd.Timedelta(hours=1)
+                
+                if current_time > start_time:
+                    previous_time = current_time - pd.Timedelta(hours=1)
+                    mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
+                    if not group.loc[mask].empty:
+                        hourly_avg = group.loc[mask].mean()
+                        hourly_avg['station'] = station
+                        hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                        hourly_obs.append(hourly_avg)
+                
                 while current_time <= end_time:
                     previous_time = current_time - pd.Timedelta(hours=1)
                     mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
