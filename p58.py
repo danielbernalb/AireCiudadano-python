@@ -1,5 +1,3 @@
-#Funciona OK, faltan cambios de hora de inicio y final para promedio horario
-
 from flask import Flask, request, jsonify, render_template_string
 import requests
 import pandas as pd
@@ -100,11 +98,16 @@ def index():
             <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
-            <input type="time" id="start_time" name="start_time" value="{{ start_time }}"><br><br>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="3600" list="hour-markers"><br><br>
             <label for="end_date">End date/time:</label>
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
             <label for="end_time"> / </label>
-            <input type="time" id="end_time" name="end_time" value="{{ end_time }}"><br><br>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="3600" list="hour-markers"><br><br>
+            <datalist id="hour-markers">
+                {% for hour in range(24) %}
+                    <option value="{{ '%02d:00'|format(hour) }}"></option>
+                {% endfor %}
+            </datalist>
             <label for="aggregation_method">Aggregation method:</label>
             <select id="aggregation_method" name="aggregation_method">
                 <option value="step" {% if aggregation_method == 'step' %}selected{% endif %}>Step</option>
@@ -167,12 +170,19 @@ def data():
 
         if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'])
-            resample_rule = f"{step_number}{step_option[0].upper()}"
             obs.set_index(['station', 'date'], inplace=True)
 
             obs = obs.apply(pd.to_numeric, errors='coerce')
-            obs = obs.groupby('station').resample(resample_rule, level='date').mean().reset_index()
-            obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            hourly_obs = []
+
+            for station, group in obs.groupby('station'):
+                for hour in pd.date_range(start=start_datetime, end=end_datetime, freq='H', closed='right'):
+                    hourly_avg = group.between_time((hour - pd.Timedelta(hours=1)).time(), (hour - pd.Timedelta(seconds=1)).time()).mean()
+                    hourly_avg['station'] = station
+                    hourly_avg['date'] = hour.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_obs.append(hourly_avg)
+
+            obs = pd.DataFrame(hourly_obs)
 
         total_records = obs.shape[0]
 
