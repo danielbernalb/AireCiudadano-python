@@ -175,12 +175,18 @@ def data():
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
+            start_time = pd.to_datetime(start_datetime)
+            end_time = pd.to_datetime(end_datetime)
+
             for station, group in obs.groupby('station'):
-                for hour in pd.date_range(start=start_datetime, end=end_datetime, freq='H', closed='right'):
-                    hourly_avg = group.between_time((hour - pd.Timedelta(hours=1)).time(), (hour - pd.Timedelta(seconds=1)).time()).mean()
+                current_time = start_time + pd.Timedelta(hours=1)
+                while current_time <= end_time:
+                    start_interval = current_time - pd.Timedelta(hours=1)
+                    hourly_avg = group.loc[start_interval:current_time - pd.Timedelta(seconds=1)].mean()
                     hourly_avg['station'] = station
-                    hourly_avg['date'] = hour.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
                     hourly_obs.append(hourly_avg)
+                    current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs)
 
