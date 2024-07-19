@@ -170,10 +170,9 @@ def data():
             obs = obs.apply(pd.to_numeric, errors='coerce')
             obs = obs.groupby('station').resample('1T', level='date').mean().reset_index()
 
-            obs['date'] = obs['date'] + pd.to_timedelta(step_number, unit=step_option[0])
-            obs = obs[obs['date'].dt.minute == 0].reset_index(drop=True)
-            obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-
+            # Shift timestamps for accumulated average
+            obs['date'] = obs['date'].apply(lambda x: x.replace(minute=0, second=0, microsecond=0) + pd.DateOffset(hours=1))
+        
         total_records = obs.shape[0]
 
         # Convert DataFrame to dictionary and replace NaN with None explicitly
