@@ -87,7 +87,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 587:</label><br>
+            <label for="variables">Select variables 588:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -179,12 +179,13 @@ def data():
             end_time = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
-                current_time = start_time
+                current_time = start_time + pd.Timedelta(hours=1)
                 while current_time <= end_time:
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    mask = ((group.index.get_level_values('date') >= current_time - pd.Timedelta(hours=1)) &
+                            (group.index.get_level_values('date') < current_time))
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_avg['date'] = (current_time - pd.Timedelta(minutes=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
                     hourly_obs.append(hourly_avg)
                     current_time += pd.Timedelta(hours=1)
 
