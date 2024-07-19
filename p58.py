@@ -169,14 +169,14 @@ def data():
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         if aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'])
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            start_time = pd.to_datetime(start_datetime)
-            end_time = pd.to_datetime(end_datetime)
+            start_time = pd.to_datetime(start_datetime, utc=True)
+            end_time = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
                 current_time = start_time
