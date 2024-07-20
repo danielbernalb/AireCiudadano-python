@@ -87,7 +87,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables OK65:</label><br>
+            <label for="variables">Select variables OK66:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -152,7 +152,8 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = f"{start_date}T{start_time}:00Z"
+    start_datetime = pd.to_datetime(f"{start_date}T{start_time}:00Z") - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+    start_datetime = start_datetime.isoformat()
     end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
@@ -182,21 +183,34 @@ def data():
                 current_time = start_time
                 while current_time <= end_time:
                     if current_time == start_time:
+                        # Para la primera hora, ajusta previous_time para incluir el rango de 04:01 hasta 05:00
                         previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
                     else:
+                        # Para otras horas, set previous_time a una hora menos
                         previous_time = current_time - pd.Timedelta(hours=1)
+
+                    # Crear una máscara para el rango de tiempo desde previous_time hasta current_time
                     mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
+                    
+                    # Calcular la media de los datos enmascarados
                     hourly_avg = group.loc[mask].mean()
+                    
+                    # Añadir la información de la estación y la fecha al promedio por hora
                     hourly_avg['station'] = station
                     hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    
+                    # Añadir el promedio por hora a la lista
                     hourly_obs.append(hourly_avg)
+                    
+                    # Incrementar el tiempo actual en una hora
                     current_time += pd.Timedelta(hours=1)
 
+            # Convertir la lista de promedios por hora a un DataFrame
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         total_records = obs.shape[0]
 
-        # Convert DataFrame to dictionary and replace NaN with None explicitly
+        # Convertir el DataFrame a un diccionario y reemplazar NaN con None explícitamente
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
