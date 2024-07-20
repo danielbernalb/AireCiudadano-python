@@ -90,7 +90,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 67:</label><br>
+            <label for="variables">Select variables 68:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -156,7 +156,7 @@ def data():
     station_filter = request.form.get('station_filter', '')
 
     start_datetime = pd.to_datetime(f"{start_date}T{start_time}:00Z") - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-    start_datetime_str = start_datetime.isoformat()
+    start_datetime_str = start_datetime.strftime('%Y-%m-%dT%H:%M:%SZ')
     app.logger.debug(f'Adjusted start_datetime: {start_datetime_str}')
     end_datetime = f"{end_date}T{end_time}:00Z"
 
