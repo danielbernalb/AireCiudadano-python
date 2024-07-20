@@ -87,7 +87,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 61:</label><br>
+            <label for="variables">Select variables OK595:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -181,30 +181,17 @@ def data():
             for station, group in obs.groupby('station'):
                 current_time = start_time
                 while current_time <= end_time:
-                    #if current_time == start_time:
-                        # For the first hour, set previous_time to one hour less and one minute more
-                    #    previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-                    #else:
-                        # For other hours, set previous_time to one hour less
-                    previous_time = current_time - pd.Timedelta(hours=1)
-
-                    # Create a mask for the time range from previous_time to current_time
+                    if current_time == start_time:
+                        previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+                    else:
+                        previous_time = current_time - pd.Timedelta(hours=1)
                     mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
-                    
-                    # Calculate the mean of the masked data
                     hourly_avg = group.loc[mask].mean()
-                    
-                    # Add station and date information to the hourly average
                     hourly_avg['station'] = station
                     hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    
-                    # Append the hourly average to the list
                     hourly_obs.append(hourly_avg)
-                    
-                    # Increment the current time by one hour
                     current_time += pd.Timedelta(hours=1)
 
-            # Convert the list of hourly averages to a DataFrame
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         total_records = obs.shape[0]
