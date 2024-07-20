@@ -89,7 +89,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 70:</label><br>
+            <label for="variables">Select variables 71:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -182,12 +182,17 @@ def data():
                 start_time = pd.to_datetime(start_datetime_str)
                 end_time = pd.to_datetime(end_datetime)
 
+                # Asegurarse de que las fechas sean tipo Timestamp para la comparación
                 current_time = start_time.replace(minute=0, second=0, microsecond=0) + pd.Timedelta(hours=1)
                 while current_time <= end_time:
                     if current_time == start_time:
                         previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
                     else:
                         previous_time = current_time - pd.Timedelta(hours=1)
+
+                    # Convertir fechas a tipo Timestamp antes de la comparación
+                    previous_time = pd.Timestamp(previous_time)
+                    current_time = pd.Timestamp(current_time)
 
                     mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
