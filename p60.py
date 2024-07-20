@@ -87,7 +87,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 71:</label><br>
+            <label for="variables">Select variables 72:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -154,7 +154,7 @@ def data():
 
     # Adjust start_datetime to be one hour earlier
     start_datetime = f"{start_date}T{start_time}:00Z"
-    start_datetime = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
+    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
     end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
@@ -162,7 +162,7 @@ def data():
     else:
         step = _get_step(step_number, step_option)
 
-    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+    url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
@@ -177,12 +177,12 @@ def data():
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            start_time = pd.to_datetime(start_datetime, utc=True)
-            end_time = pd.to_datetime(end_datetime, utc=True)
+            start_time_dt = pd.to_datetime(start_datetime, utc=True)
+            end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
-                current_time = start_time
-                while current_time <= end_time:
+                current_time = start_time_dt
+                while current_time <= end_time_dt:
                     mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
@@ -191,6 +191,9 @@ def data():
                     current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+
+        # Filter the results to ensure dates are within the original specified range
+        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
 
         total_records = obs.shape[0]
 
