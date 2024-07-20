@@ -87,7 +87,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables OK63:</label><br>
+            <label for="variables">Select variables OK64:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -138,29 +138,6 @@ def index():
        end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method)
 
 @app.route('/dataresult', methods=['POST'])
-def calculate_hourly_averages(obs, start_datetime, end_datetime):
-    obs['date'] = pd.to_datetime(obs['date'], utc=True)
-    obs.set_index(['station', 'date'], inplace=True)
-
-    obs = obs.apply(pd.to_numeric, errors='coerce')
-    hourly_obs = []
-
-    start_time = pd.to_datetime(start_datetime, utc=True)
-    end_time = pd.to_datetime(end_datetime, utc=True)
-
-    for station, group in obs.groupby('station'):
-        current_time = start_time
-        while current_time <= end_time:
-            previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-            mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
-            hourly_avg = group.loc[mask].mean()
-            hourly_avg['station'] = station
-            hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-            hourly_obs.append(hourly_avg)
-            current_time += pd.Timedelta(hours=1)
-
-    return pd.DataFrame(hourly_obs).reset_index(drop=True)
-
 def data():
     variables = request.form.getlist('variables')
     base_url = "http://194.242.56.226:30000/api/v1"
@@ -192,7 +169,27 @@ def data():
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         if aggregation_method == 'average':
-            obs = calculate_hourly_averages(obs, start_datetime, end_datetime)
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            obs.set_index(['station', 'date'], inplace=True)
+
+            obs = obs.apply(pd.to_numeric, errors='coerce')
+            hourly_obs = []
+
+            start_time = pd.to_datetime(start_datetime, utc=True)
+            end_time = pd.to_datetime(end_datetime, utc=True)
+
+            for station, group in obs.groupby('station'):
+                current_time = start_time
+                while current_time <= end_time:
+                    previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+                    mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
+                    hourly_avg = group.loc[mask].mean()
+                    hourly_avg['station'] = station
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_obs.append(hourly_avg)
+                    current_time += pd.Timedelta(hours=1)
+
+            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         total_records = obs.shape[0]
 
