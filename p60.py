@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify, render_template_string
 import requests
 import pandas as pd
-import numpy as np
 import datetime
+import numpy as np
+import json
 
 # Constants
 selected_cols = [
@@ -24,11 +25,11 @@ def get_data(url, selected_cols):
 
         if 'values' in df.columns:
             df = df.explode('values')
-            df['date'] = df['values'].apply(lambda x: pd.Timestamp.fromtimestamp(x[0]))
+            df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
             df['value'] = df['values'].apply(lambda x: x[1])
             df = df.drop(columns="values")
         elif 'value' in df.columns:
-            df['date'] = df['value'].apply(lambda x: pd.Timestamp.fromtimestamp(x[0]))
+            df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
             df['value'] = df['value'].apply(lambda x: x[1])
 
         df = df.rename(columns={
@@ -88,7 +89,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 72:</label><br>
+            <label for="variables">Select variables 73:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -153,30 +154,33 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = pd.Timestamp(f"{start_date}T{start_time}:00Z") - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-    end_datetime = pd.Timestamp(f"{end_date}T{end_time}:00Z")
+    start_datetime = pd.to_datetime(f"{start_date}T{start_time}:00Z") - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+    start_datetime_str = start_datetime.strftime('%Y-%m-%dT%H:%M:%SZ')
     app.logger.debug(f'Start_time: {start_time}')
-    app.logger.debug(f'Adjusted start_datetime: {start_datetime.isoformat()}')
-    start_datetime_str = start_datetime.isoformat()
-    end_datetime_str = end_datetime.isoformat()
+    app.logger.debug(f'Adjusted start_datetime: {start_datetime_str}')
+    end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
         step = '1m'
     else:
         step = _get_step(step_number, step_option)
 
-    url = f"{base_url}/query_range?query={query}&start={start_datetime_str}&end={end_datetime_str}&step={step}"
+    url = f"{base_url}/query_range?query={query}&start={start_datetime_str}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
+        if station_filter:
+            filters = station_filter.split(',')
+            obs = obs[obs['station'].str.contains('|'.join(filters), case=False, na=False)]
+
         if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'])
             obs = obs.set_index(['station', 'date'])
             hourly_obs = []
 
             for station, group in obs.groupby(level='station'):
-                start_time = pd.Timestamp(start_datetime_str)
-                end_time = pd.Timestamp(end_datetime_str)
+                start_time = pd.to_datetime(start_datetime_str)
+                end_time = pd.to_datetime(end_datetime)
 
                 current_time = start_time.replace(minute=0, second=0, microsecond=0) + pd.Timedelta(hours=1)
                 while current_time <= end_time:
@@ -184,6 +188,10 @@ def data():
                         previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
                     else:
                         previous_time = current_time - pd.Timedelta(hours=1)
+
+                    # Asegurarse de que ambas fechas sean tipo Timestamp
+                    previous_time = pd.Timestamp(previous_time)
+                    current_time = pd.Timestamp(current_time)
 
                     mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
