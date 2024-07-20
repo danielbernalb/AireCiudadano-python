@@ -89,7 +89,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 73:</label><br>
+            <label for="variables">Select variables 74:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -179,8 +179,8 @@ def data():
             hourly_obs = []
 
             for station, group in obs.groupby(level='station'):
-                start_time = pd.to_datetime(start_datetime_str)
-                end_time = pd.to_datetime(end_datetime)
+                start_time = pd.Timestamp(start_datetime_str)
+                end_time = pd.Timestamp(end_datetime)
 
                 current_time = start_time.replace(minute=0, second=0, microsecond=0) + pd.Timedelta(hours=1)
                 while current_time <= end_time:
