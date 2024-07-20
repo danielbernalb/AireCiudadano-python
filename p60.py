@@ -169,24 +169,41 @@ def data():
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         if aggregation_method == 'average':
+            adjusted_start_datetime = (pd.to_datetime(start_datetime) - pd.Timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            obs = get_data(url, variables)  # Asegúrate de usar el adjusted_start_datetime aquí
+            if station_filter:
+                filters = station_filter.split(',')
+                obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+    
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            start_time = pd.to_datetime(start_datetime, utc=True)
+            start_time = pd.to_datetime(adjusted_start_datetime, utc=True)
             end_time = pd.to_datetime(end_datetime, utc=True)
+
+            # Ajustamos el start_time para incluir la hora anterior
+            adjusted_start_time = start_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
 
             for station, group in obs.groupby('station'):
                 current_time = start_time
                 while current_time <= end_time:
-                    previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+                    # Usamos adjusted_start_time para el primer intervalo
+                    if current_time == start_time:
+                        previous_time = adjusted_start_time
+                    else:
+                        previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+
                     mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
-                    hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    hourly_obs.append(hourly_avg)
+
+                    if not hourly_avg.empty:
+                        hourly_avg['station'] = station
+                        hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                        hourly_obs.append(hourly_avg)
+
                     current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
