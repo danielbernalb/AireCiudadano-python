@@ -20,7 +20,7 @@ def get_data(url, selected_cols):
     try:
         app.logger.debug(f'Request URL: {url}')
         response = requests.get(url)
-        app.logger.debug(f'Response: {response.text}')
+        #app.logger.debug(f'Response: {response.text}')
         data = response.json().get('data', {}).get('result', [])
         df = pd.json_normalize(data)
 
@@ -90,7 +90,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 68:</label><br>
+            <label for="variables">Select variables 69:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -155,6 +155,7 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
+    app.logger.debug(f'Start_time: {start_time}')
     start_datetime = pd.to_datetime(f"{start_date}T{start_time}:00Z") - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
     start_datetime_str = start_datetime.strftime('%Y-%m-%dT%H:%M:%SZ')
     app.logger.debug(f'Adjusted start_datetime: {start_datetime_str}')
