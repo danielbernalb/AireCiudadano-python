@@ -18,9 +18,7 @@ app = Flask(__name__)
 # Get data from API
 def get_data(url, selected_cols):
     try:
-        app.logger.debug(f'Request URL: {url}')
-        response = requests.get(url)
-        data = response.json().get('data', {}).get('result', [])
+        data = requests.get(url).json()['data']['result']
         df = pd.json_normalize(data)
 
         if 'values' in df.columns:
@@ -89,7 +87,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 74:</label><br>
+            <label for="variables">Select variables OK595:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -154,10 +152,7 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = pd.to_datetime(f"{start_date}T{start_time}:00Z") - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-    start_datetime_str = start_datetime.strftime('%Y-%m-%dT%H:%M:%SZ')
-    app.logger.debug(f'Start_time: {start_time}')
-    app.logger.debug(f'Adjusted start_datetime: {start_datetime_str}')
+    start_datetime = f"{start_date}T{start_time}:00Z"
     end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
@@ -165,35 +160,28 @@ def data():
     else:
         step = _get_step(step_number, step_option)
 
-    url = f"{base_url}/query_range?query={query}&start={start_datetime_str}&end={end_datetime}&step={step}"
+    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
         if station_filter:
             filters = station_filter.split(',')
-            obs = obs[obs['station'].str.contains('|'.join(filters), case=False, na=False)]
+            obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         if aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'])
-            obs = obs.set_index(['station', 'date'])
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            obs.set_index(['station', 'date'], inplace=True)
+
+            obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            for station, group in obs.groupby(level='station'):
-                start_time = pd.Timestamp(start_datetime_str)
-                end_time = pd.Timestamp(end_datetime)
+            start_time = pd.to_datetime(start_datetime, utc=True)
+            end_time = pd.to_datetime(end_datetime, utc=True)
 
-                current_time = start_time.replace(minute=0, second=0, microsecond=0) + pd.Timedelta(hours=1)
+            for station, group in obs.groupby('station'):
+                current_time = start_time
                 while current_time <= end_time:
-                    if current_time == start_time:
-                        previous_time = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-                    else:
-                        previous_time = current_time - pd.Timedelta(hours=1)
-
-                    # Asegurarse de que ambas fechas sean tipo Timestamp
-                    previous_time = pd.Timestamp(previous_time)
-                    current_time = pd.Timestamp(current_time)
-
-                    mask = (group.index.get_level_values('date') > previous_time) & (group.index.get_level_values('date') <= current_time)
+                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
                     hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -204,6 +192,7 @@ def data():
 
         total_records = obs.shape[0]
 
+        # Convert DataFrame to dictionary and replace NaN with None explicitly
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
