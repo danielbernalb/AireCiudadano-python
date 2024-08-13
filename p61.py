@@ -116,7 +116,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 77:</label><br>
+            <label for="variables">Select variables 78:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -170,7 +170,7 @@ def index():
 def data():
     try:
         variables = request.form.getlist('variables')
-        base_url = "http://194.242.56.226:30000/api/v1"
+        base_url = "http://88.99.187.134:30000/api/v1"
         query = '{job%3D"pushgateway"}'
 
         start_date = request.form['start_date']
