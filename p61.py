@@ -1,52 +1,27 @@
-import time
-import requests
-import datetime
-import pandas as pd
-import numpy as np
-import gc
 from flask import Flask, request, jsonify, render_template_string
+import requests
+import pandas as pd
+import datetime
+import numpy as np
+import json
+from dateutil.parser import parse
+from dateutil.relativedelta import relativedelta
 
-app = Flask(__name__)
-
+# Constants
 selected_cols = [
     "PM25", "PM25raw", "PM251", "PM252", "PM1", "CO2", "VOC", "NOx",
     "Humidity", "Temperature", "Noise", "NoisePeak", "RSSI", "Latitude",
     "Longitude", "InOut",
 ]
 
-def fetch_with_retries(url, retries=5, backoff_factor=0.3):
-    for i in range(retries):
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as e:
-            if i < retries - 1:
-                time.sleep(backoff_factor * (2 ** i))
-            else:
-                raise
+# Flask application
+app = Flask(__name__)
 
-def get_data_in_batches(base_url, query, selected_cols, start_datetime, end_datetime, step):
+# Get data from API
+def get_data(url, selected_cols):
     try:
-        current_start = start_datetime
-        all_data = []
-
-        while current_start < end_datetime:
-            current_end = min(current_start + datetime.timedelta(hours=1), end_datetime)
-            batch_url = f"{base_url}/query_range?query={query}&start={current_start.isoformat()}Z&end={current_end.isoformat()}Z&step={step}"
-            response = fetch_with_retries(batch_url)
-            batch_data = response.json()['data']['result']
-            if batch_data:
-                df = pd.json_normalize(batch_data)
-                all_data.append(df)
-
-            current_start = current_end
-            gc.collect()
-
-        if not all_data:
-            return pd.DataFrame()
-
-        df = pd.concat(all_data, ignore_index=True)
+        data = requests.get(url).json()['data']['result']
+        df = pd.json_normalize(data)
 
         if 'values' in df.columns:
             df = df.explode('values')
@@ -77,9 +52,10 @@ def get_data_in_batches(base_url, query, selected_cols, start_datetime, end_date
 
         return df_result
     except Exception as e:
-        app.logger.error(f'Error in get_data_in_batches: {str(e)}')
+        app.logger.error(f'Error in get_data: {str(e)}')
         raise
 
+# Function to get wide table
 def _wide_table(df, selected_cols):
     try:
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
@@ -94,9 +70,14 @@ def _wide_table(df, selected_cols):
         app.logger.error(f'Pivot Error: {str(e)}')
         raise
 
+# Constructor of the step value for time range queries
 def _get_step(number, choice):
     options = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w", "years": "y"}
     return f"{number}{options[choice]}"
+
+def process_batch(start_datetime, end_datetime, variables, step, base_url, query):
+    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+    return get_data(url, variables)
 
 @app.route('/getdata')
 def index():
@@ -112,7 +93,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 75:</label><br>
+            <label for="variables">Select variables 76:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -165,7 +146,7 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    base_url = "http://88.99.187.134:30000/api/v1"
+    base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
     start_date = request.form['start_date']
@@ -177,73 +158,89 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Eliminar la 'Z' para evitar problemas con fromisoformat
-    start_datetime_str = f"{start_date}T{start_time}:00"
-    end_datetime_str = f"{end_date}T{end_time}:00"
-
-    start_datetime = datetime.datetime.fromisoformat(start_datetime_str)
-    end_datetime = datetime.datetime.fromisoformat(end_datetime_str)
+    start_datetime = parse(f"{start_date}T{start_time}:00Z")
+    end_datetime = parse(f"{end_date}T{end_time}:00Z")
 
     if aggregation_method == 'average':
         step = '1m'
     else:
         step = _get_step(step_number, step_option)
 
-    try:
-        obs = get_data_in_batches(base_url, query, variables, start_datetime, end_datetime, step)
+    # Definir el tamaño del lote (por ejemplo, 6 horas)
+    batch_size = relativedelta(hours=6)
 
-        if station_filter:
-            filters = station_filter.split(',')
-            obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+    all_data = []
+    current_start = start_datetime
+    while current_start < end_datetime:
+        current_end = min(current_start + batch_size, end_datetime)
+        batch_data = process_batch(current_start.isoformat(), current_end.isoformat(), variables, step, base_url, query)
+        all_data.append(batch_data)
+        current_start = current_end
 
-        if aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            obs.set_index(['station', 'date'], inplace=True)
+    obs = pd.concat(all_data, ignore_index=True)
 
-            obs = obs.apply(pd.to_numeric, errors='coerce')
-            hourly_obs = []
+    if station_filter:
+        filters = station_filter.split(',')
+        obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-            start_time_dt = pd.to_datetime(start_datetime, utc=True)
-            end_time_dt = pd.to_datetime(end_datetime, utc=True)
+    if aggregation_method == 'average':
+        obs['date'] = pd.to_datetime(obs['date'], utc=True)
+        obs.set_index(['station', 'date'], inplace=True)
 
-            for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
-                    hourly_avg = group.loc[mask].mean()
-                    hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    hourly_obs.append(hourly_avg)
-                    current_time += pd.Timedelta(hours=1)
+        obs = obs.apply(pd.to_numeric, errors='coerce')
+        hourly_obs = []
 
-            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+        start_time_dt = pd.to_datetime(start_datetime, utc=True)
+        end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
-        # Filter the results to ensure dates are within the original specified range
-        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
+        for station, group in obs.groupby('station'):
+            current_time = start_time_dt
+            while current_time <= end_time_dt:
+                mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                hourly_avg = group.loc[mask].mean()
+                hourly_avg['station'] = station
+                hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                hourly_obs.append(hourly_avg)
+                current_time += pd.Timedelta(hours=1)
 
-        total_records = obs.shape[0]
+        obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        # Convert DataFrame to dictionary and replace NaN with None explicitly
-        json_data = obs.to_dict(orient='records')
-        for record in json_data:
-            for key, value in record.items():
-                if pd.isna(value):
-                    record[key] = None
+    # Filtrar los resultados para asegurar que las fechas estén dentro del rango original especificado
+    obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
-        grouped_data = {}
-        for record in json_data:
-            station = record.pop('station')
-            if station not in grouped_data:
-                grouped_data[station] = []
-            grouped_data[station].append(record)
+    total_records = obs.shape[0]
 
-        return jsonify({
-            'total_records': total_records,
-            'data': grouped_data
-        })
-    except Exception as e:
-        app.logger.error(f'Error in data endpoint: {str(e)}')
-        return jsonify({'error': str(e)})
+    # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
+    json_data = obs.to_dict(orient='records')
+    for record in json_data:
+        for key, value in record.items():
+            if pd.isna(value):
+                record[key] = None
+
+    grouped_data = {}
+    for record in json_data:
+        station = record.pop('station')
+        if station not in grouped_data:
+            grouped_data[station] = []
+        grouped_data[station].append(record)
+
+    # Implementar paginación
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 1000, type=int)
+    
+    paginated_data = {}
+    for station, records in grouped_data.items():
+        start = (page - 1) * per_page
+        end = start + per_page
+        paginated_data[station] = records[start:end]
+
+    return jsonify({
+        'total_records': total_records,
+        'current_page': page,
+        'per_page': per_page,
+        'total_pages': (total_records + per_page - 1) // per_page,
+        'data': paginated_data
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
