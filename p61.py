@@ -6,6 +6,11 @@ import numpy as np
 import json
 from dateutil.parser import parse
 from dateutil.relativedelta import relativedelta
+import logging
+
+# Configurar logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Constants
 selected_cols = [
@@ -20,7 +25,19 @@ app = Flask(__name__)
 # Get data from API
 def get_data(url, selected_cols):
     try:
-        data = requests.get(url).json()['data']['result']
+        response = requests.get(url)
+        response.raise_for_status()  # Esto levantará una excepción para códigos de estado HTTP no exitosos
+        json_response = response.json()
+        
+        logger.debug(f"API Response: {json_response}")  # Log de la respuesta completa
+        
+        if 'data' not in json_response:
+            raise KeyError(f"'data' key not found in API response. Response keys: {list(json_response.keys())}")
+        
+        if 'result' not in json_response['data']:
+            raise KeyError(f"'result' key not found in 'data'. 'data' keys: {list(json_response['data'].keys())}")
+        
+        data = json_response['data']['result']
         df = pd.json_normalize(data)
 
         if 'values' in df.columns:
@@ -51,8 +68,14 @@ def get_data(url, selected_cols):
             df_result['Longitude'].replace(0, np.nan, inplace=True)
 
         return df_result
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        raise
+    except KeyError as e:
+        logger.error(f"KeyError in get_data: {e}")
+        raise
     except Exception as e:
-        app.logger.error(f'Error in get_data: {str(e)}')
+        logger.error(f"Unexpected error in get_data: {e}")
         raise
 
 # Function to get wide table
@@ -67,7 +90,7 @@ def _wide_table(df, selected_cols):
         df_result.columns.name = ""
         return df_result
     except Exception as e:
-        app.logger.error(f'Pivot Error: {str(e)}')
+        logger.error(f'Pivot Error: {str(e)}')
         raise
 
 # Constructor of the step value for time range queries
@@ -93,7 +116,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 76:</label><br>
+            <label for="variables">Select variables 77:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -145,102 +168,116 @@ def index():
 
 @app.route('/dataresult', methods=['POST'])
 def data():
-    variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30000/api/v1"
-    query = '{job%3D"pushgateway"}'
+    try:
+        variables = request.form.getlist('variables')
+        base_url = "http://194.242.56.226:30000/api/v1"
+        query = '{job%3D"pushgateway"}'
 
-    start_date = request.form['start_date']
-    start_time = request.form['start_time']
-    end_date = request.form['end_date']
-    end_time = request.form['end_time']
-    step_number = request.form['step_number']
-    step_option = request.form['step_option']
-    aggregation_method = request.form['aggregation_method']
-    station_filter = request.form.get('station_filter', '')
+        start_date = request.form['start_date']
+        start_time = request.form['start_time']
+        end_date = request.form['end_date']
+        end_time = request.form['end_time']
+        step_number = request.form['step_number']
+        step_option = request.form['step_option']
+        aggregation_method = request.form['aggregation_method']
+        station_filter = request.form.get('station_filter', '')
 
-    start_datetime = parse(f"{start_date}T{start_time}:00Z")
-    end_datetime = parse(f"{end_date}T{end_time}:00Z")
+        start_datetime = parse(f"{start_date}T{start_time}:00Z")
+        end_datetime = parse(f"{end_date}T{end_time}:00Z")
 
-    if aggregation_method == 'average':
-        step = '1m'
-    else:
-        step = _get_step(step_number, step_option)
+        if aggregation_method == 'average':
+            step = '1m'
+        else:
+            step = _get_step(step_number, step_option)
 
-    # Definir el tamaño del lote (por ejemplo, 6 horas)
-    batch_size = relativedelta(hours=6)
+        # Definir el tamaño del lote (por ejemplo, 6 horas)
+        batch_size = relativedelta(hours=6)
 
-    all_data = []
-    current_start = start_datetime
-    while current_start < end_datetime:
-        current_end = min(current_start + batch_size, end_datetime)
-        batch_data = process_batch(current_start.isoformat(), current_end.isoformat(), variables, step, base_url, query)
-        all_data.append(batch_data)
-        current_start = current_end
+        all_data = []
+        current_start = start_datetime
+        while current_start < end_datetime:
+            current_end = min(current_start + batch_size, end_datetime)
+            try:
+                batch_data = process_batch(current_start.isoformat(), current_end.isoformat(), variables, step, base_url, query)
+                all_data.append(batch_data)
+            except Exception as e:
+                logger.error(f"Error processing batch from {current_start} to {current_end}: {e}")
+                # Opcionalmente, podrías decidir continuar con el siguiente lote en lugar de detener todo el proceso
+                # Si prefieres detener todo el proceso, descomenta la siguiente línea:
+                # raise
+            current_start = current_end
 
-    obs = pd.concat(all_data, ignore_index=True)
+        if not all_data:
+            return jsonify({'error': 'No se pudo obtener ningún dato válido'}), 500
 
-    if station_filter:
-        filters = station_filter.split(',')
-        obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+        obs = pd.concat(all_data, ignore_index=True)
 
-    if aggregation_method == 'average':
-        obs['date'] = pd.to_datetime(obs['date'], utc=True)
-        obs.set_index(['station', 'date'], inplace=True)
+        if station_filter:
+            filters = station_filter.split(',')
+            obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-        obs = obs.apply(pd.to_numeric, errors='coerce')
-        hourly_obs = []
+        if aggregation_method == 'average':
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            obs.set_index(['station', 'date'], inplace=True)
 
-        start_time_dt = pd.to_datetime(start_datetime, utc=True)
-        end_time_dt = pd.to_datetime(end_datetime, utc=True)
+            obs = obs.apply(pd.to_numeric, errors='coerce')
+            hourly_obs = []
 
-        for station, group in obs.groupby('station'):
-            current_time = start_time_dt
-            while current_time <= end_time_dt:
-                mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
-                hourly_avg = group.loc[mask].mean()
-                hourly_avg['station'] = station
-                hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                hourly_obs.append(hourly_avg)
-                current_time += pd.Timedelta(hours=1)
+            start_time_dt = pd.to_datetime(start_datetime, utc=True)
+            end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
-        obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+            for station, group in obs.groupby('station'):
+                current_time = start_time_dt
+                while current_time <= end_time_dt:
+                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    hourly_avg = group.loc[mask].mean()
+                    hourly_avg['station'] = station
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_obs.append(hourly_avg)
+                    current_time += pd.Timedelta(hours=1)
 
-    # Filtrar los resultados para asegurar que las fechas estén dentro del rango original especificado
-    obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
+            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-    total_records = obs.shape[0]
+        # Filtrar los resultados para asegurar que las fechas estén dentro del rango original especificado
+        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
-    # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
-    json_data = obs.to_dict(orient='records')
-    for record in json_data:
-        for key, value in record.items():
-            if pd.isna(value):
-                record[key] = None
+        total_records = obs.shape[0]
 
-    grouped_data = {}
-    for record in json_data:
-        station = record.pop('station')
-        if station not in grouped_data:
-            grouped_data[station] = []
-        grouped_data[station].append(record)
+        # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
+        json_data = obs.to_dict(orient='records')
+        for record in json_data:
+            for key, value in record.items():
+                if pd.isna(value):
+                    record[key] = None
 
-    # Implementar paginación
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 1000, type=int)
-    
-    paginated_data = {}
-    for station, records in grouped_data.items():
-        start = (page - 1) * per_page
-        end = start + per_page
-        paginated_data[station] = records[start:end]
+        grouped_data = {}
+        for record in json_data:
+            station = record.pop('station')
+            if station not in grouped_data:
+                grouped_data[station] = []
+            grouped_data[station].append(record)
 
-    return jsonify({
-        'total_records': total_records,
-        'current_page': page,
-        'per_page': per_page,
-        'total_pages': (total_records + per_page - 1) // per_page,
-        'data': paginated_data
-    })
+        # Implementar paginación
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 1000, type=int)
+        
+        paginated_data = {}
+        for station, records in grouped_data.items():
+            start = (page - 1) * per_page
+            end = start + per_page
+            paginated_data[station] = records[start:end]
+
+        return jsonify({
+            'total_records': total_records,
+            'current_page': page,
+            'per_page': per_page,
+            'total_pages': (total_records + per_page - 1) // per_page,
+            'data': paginated_data
+        })
+
+    except Exception as e:
+        logger.error(f"Error in data endpoint: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
