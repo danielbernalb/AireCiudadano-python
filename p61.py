@@ -157,7 +157,7 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30000/api/v1"
+    base_url = "http://88.99.187.134:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
     start_date = request.form['start_date']
