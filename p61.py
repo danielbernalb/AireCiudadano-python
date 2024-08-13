@@ -1,9 +1,18 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, url_for
 import requests
 import pandas as pd
 import datetime
 import numpy as np
 import json
+from celery import Celery
+
+# Flask and Celery configuration
+app = Flask(__name__)
+app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
+app.config['CELERY_RESULT_BACKEND'] = 'redis://localhost:6379/0'
+
+celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'])
+celery.conf.update(app.config)
 
 # Constants
 selected_cols = [
@@ -12,11 +21,8 @@ selected_cols = [
     "Longitude", "InOut",
 ]
 
-# Flask application
-app = Flask(__name__)
-
-# Get data from API with pagination support
-def get_data(url, selected_cols, start, limit):
+@celery.task(bind=True)
+def get_data_task(self, url, selected_cols):
     try:
         data = requests.get(url).json()['data']['result']
         df = pd.json_normalize(data)
@@ -48,8 +54,7 @@ def get_data(url, selected_cols, start, limit):
         if 'Longitude' in df_result.columns:
             df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-        # Pagination: return only the subset of data based on start and limit
-        return df_result.iloc[start:start + limit]
+        return df_result.to_dict(orient='records')
     except Exception as e:
         app.logger.error(f'Error in get_data: {str(e)}')
         raise
@@ -69,12 +74,80 @@ def _wide_table(df, selected_cols):
         app.logger.error(f'Pivot Error: {str(e)}')
         raise
 
+# Constructor of the step value for time range queries
+def _get_step(number, choice):
+    options = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w", "years": "y"}
+    return f"{number}{options[choice]}"
+
+@app.route('/getdata')
+def index():
+    variables = request.args.getlist('variables') or selected_cols
+    start_date = request.args.get('start_date', '2024-05-09')
+    start_time = request.args.get('start_time', '08:00')
+    end_date = request.args.get('end_date', '2024-05-09')
+    end_time = request.args.get('end_time', '10:00')
+    step_number = request.args.get('step_number', '1')
+    step_option = request.args.get('step_option', 'hours')
+    station_filter = request.args.get('station_filter', '')
+    aggregation_method = request.args.get('aggregation_method', 'step')
+
+    return render_template_string('''
+        <form action="/dataresult" method="post">
+            <label for="variables">Select variables 72:</label><br>
+            <input type="checkbox" id="select_all" onclick="toggle(this);">
+            <label for="select_all">Select/Deselect All</label><br>
+            {% for col in selected_cols %}
+                <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
+                <label for="{{ col }}">{{ col }}</label><br>
+            {% endfor %}
+            <br>
+            <label for="start_date">Start date/time:</label>
+            <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+            <label for="start_time"> / </label>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="3600" list="hour-markers"><br><br>
+            <label for="end_date">End date/time:</label>
+            <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
+            <label for="end_time"> / </label>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="3600" list="hour-markers"><br><br>
+            <datalist id="hour-markers">
+                {% for hour in range(24) %}
+                    <option value="{{ '%02d:00'|format(hour) }}"></option>
+                {% endfor %}
+            </datalist>
+            <label for="aggregation_method">Aggregation method:</label>
+            <select id="aggregation_method" name="aggregation_method">
+                <option value="step" {% if aggregation_method == 'step' %}selected{% endif %}>Step</option>
+                <option value="average" {% if aggregation_method == 'average' %}selected{% endif %}>Average</option>
+            </select><br><br>
+            <label for="step_number">Step/Average number:</label>
+            <input type="number" id="step_number" name="step_number" value="{{ step_number }}">
+            <label for="step_option">Option:</label>
+            <select id="step_option" name="step_option">
+                <option value="minutes" {% if step_option == 'minutes' %}selected{% endif %}>Minutes</option>
+                <option value="hours" {% if step_option == 'hours' %}selected{% endif %}>Hours</option>
+                <option value="days" {% if step_option == 'days' %}selected{% endif %}>Days</option>
+                <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
+            </select><br><br>
+            <label for="station_filter">Station Filter:</label>
+            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
+            <input type="submit" value="Submit">
+        </form>
+        <script>
+            function toggle(source) {
+                checkboxes = document.getElementsByName('variables');
+                for (var i = 0; i < checkboxes.length; i++) {
+                    checkboxes[i].checked = source.checked;
+                }
+            }
+        </script>
+    ''', selected_cols=selected_cols, variables=variables, start_date=start_date, start_time=start_time,
+       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method)
+
 @app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
     base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
-
     start_date = request.form['start_date']
     start_time = request.form['start_time']
     end_date = request.form['end_date']
@@ -95,65 +168,21 @@ def data():
 
     url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
 
-    try:
-        # Implementing pagination
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 1000))
-        start = (page - 1) * limit
+    # Trigger asynchronous task
+    task = get_data_task.apply_async(args=[url, variables])
 
-        obs = get_data(url, variables, start, limit)
-        if station_filter:
-            filters = station_filter.split(',')
-            obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+    return jsonify({'task_id': task.id}), 202
 
-        if aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            obs.set_index(['station', 'date'], inplace=True)
-
-            obs = obs.apply(pd.to_numeric, errors='coerce')
-            hourly_obs = []
-
-            start_time_dt = pd.to_datetime(start_datetime, utc=True)
-            end_time_dt = pd.to_datetime(end_datetime, utc=True)
-
-            for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
-                    hourly_avg = group.loc[mask].mean()
-                    hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    hourly_obs.append(hourly_avg)
-                    current_time += pd.Timedelta(hours=1)
-
-            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
-
-        # Filter the results to ensure dates are within the original specified range
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
-
-        total_records = obs.shape[0]
-
-        # Convert DataFrame to dictionary and replace NaN with None explicitly
-        json_data = obs.to_dict(orient='records')
-        for record in json_data:
-            for key, value in record.items():
-                if pd.isna(value):
-                    record[key] = None
-
-        grouped_data = {}
-        for record in json_data:
-            station = record.pop('station')
-            if station not in grouped_data:
-                grouped_data[station] = []
-            grouped_data[station].append(record)
-
-        return jsonify({
-            'total_records': total_records,
-            'data': grouped_data
-        })
-    except Exception as e:
-        app.logger.error(f'Error in data endpoint: {str(e)}')
-        return jsonify({'error': str(e)})
+@app.route('/status/<task_id>')
+def taskstatus(task_id):
+    task = get_data_task.AsyncResult(task_id)
+    if task.state == 'PENDING':
+        response = {'state': task.state, 'status': 'Pending...'}
+    elif task.state != 'FAILURE':
+        response = {'state': task.state, 'result': task.result}
+    else:
+        response = {'state': task.state, 'status': str(task.info)}
+    return jsonify(response)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
