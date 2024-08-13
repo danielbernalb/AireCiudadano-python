@@ -1,21 +1,31 @@
-from flask import Flask, request, jsonify, render_template_string
+import time
 import requests
-import pandas as pd
 import datetime
+import pandas as pd
 import numpy as np
 import gc
+from flask import Flask, request, jsonify, render_template_string
 
-# Constants
+app = Flask(__name__)
+
 selected_cols = [
     "PM25", "PM25raw", "PM251", "PM252", "PM1", "CO2", "VOC", "NOx",
     "Humidity", "Temperature", "Noise", "NoisePeak", "RSSI", "Latitude",
     "Longitude", "InOut",
 ]
 
-# Flask application
-app = Flask(__name__)
+def fetch_with_retries(url, retries=5, backoff_factor=0.3):
+    for i in range(retries):
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            if i < retries - 1:
+                time.sleep(backoff_factor * (2 ** i))
+            else:
+                raise
 
-# Function to get data in batches
 def get_data_in_batches(base_url, query, selected_cols, start_datetime, end_datetime, step):
     try:
         current_start = start_datetime
@@ -24,20 +34,20 @@ def get_data_in_batches(base_url, query, selected_cols, start_datetime, end_date
         while current_start < end_datetime:
             current_end = min(current_start + datetime.timedelta(hours=1), end_datetime)
             batch_url = f"{base_url}/query_range?query={query}&start={current_start.isoformat()}Z&end={current_end.isoformat()}Z&step={step}"
-            batch_data = requests.get(batch_url).json()['data']['result']
+            response = fetch_with_retries(batch_url)
+            batch_data = response.json()['data']['result']
             if batch_data:
                 df = pd.json_normalize(batch_data)
                 all_data.append(df)
 
             current_start = current_end
-            gc.collect()  # Liberar memoria después de cada lote
+            gc.collect()
 
         if not all_data:
-            return pd.DataFrame()  # Si no se obtiene ningún dato, devolver un DataFrame vacío
+            return pd.DataFrame()
 
         df = pd.concat(all_data, ignore_index=True)
 
-        # Procesamiento del DataFrame, similar a la función get_data original
         if 'values' in df.columns:
             df = df.explode('values')
             df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
@@ -70,7 +80,6 @@ def get_data_in_batches(base_url, query, selected_cols, start_datetime, end_date
         app.logger.error(f'Error in get_data_in_batches: {str(e)}')
         raise
 
-# Function to get wide table
 def _wide_table(df, selected_cols):
     try:
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
@@ -85,7 +94,6 @@ def _wide_table(df, selected_cols):
         app.logger.error(f'Pivot Error: {str(e)}')
         raise
 
-# Constructor of the step value for time range queries
 def _get_step(number, choice):
     options = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w", "years": "y"}
     return f"{number}{options[choice]}"
