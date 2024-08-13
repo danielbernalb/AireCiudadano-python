@@ -104,7 +104,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 73:</label><br>
+            <label for="variables">Select variables 74:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -169,8 +169,12 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}:00Z")
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}:00Z")
+    # Eliminar la 'Z' para evitar problemas con fromisoformat
+    start_datetime_str = f"{start_date}T{start_time}:00"
+    end_datetime_str = f"{end_date}T{end_time}:00"
+
+    start_datetime = datetime.datetime.fromisoformat(start_datetime_str)
+    end_datetime = datetime.datetime.fromisoformat(end_datetime_str)
 
     if aggregation_method == 'average':
         step = '1m'
