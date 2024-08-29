@@ -18,15 +18,26 @@ app = Flask(__name__)
 # Get data from API
 def get_data(url, selected_cols, interval_minutes=60):
     try:
-        # Define variables
+        # Obtén las fechas y horas desde los argumentos de la petición o usa valores por defecto
+        start_date = request.args.get('start_date', '2024-05-09')
+        start_time = request.args.get('start_time', '08:00')
+        end_date = request.args.get('end_date', '2024-05-09')
+        end_time = request.args.get('end_time', '10:00')
+
+        # Convierte a objetos datetime
+        try:
+            start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+            end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+        except ValueError as e:
+            app.logger.error(f'Error in date format: {str(e)}')
+            raise ValueError("Invalid date or time format")
+
+        # Define variables para el bucle de procesamiento de datos
         all_results = []
-        start_time = datetime.datetime.fromisoformat(request.args.get('start_date') + "T" + request.args.get('start_time'))
-        end_time = datetime.datetime.fromisoformat(request.args.get('end_date') + "T" + request.args.get('end_time'))
+        current_start_time = start_datetime
 
-        current_start_time = start_time
-
-        while current_start_time < end_time:
-            current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_time)
+        while current_start_time < end_datetime:
+            current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
             query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z"
             
             try:
@@ -69,10 +80,10 @@ def get_data(url, selected_cols, interval_minutes=60):
                 app.logger.error(f'Error fetching data chunk: {str(e)}')
                 raise
 
-            # Advance to the next time window
+            # Avanza al siguiente intervalo de tiempo
             current_start_time = current_end_time
 
-        # Combine all results into a single DataFrame
+        # Combina todos los resultados en un único DataFrame
         final_df = pd.concat(all_results, ignore_index=True)
         return final_df
 
@@ -114,7 +125,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 73:</label><br>
+            <label for="variables">Select variables 74:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
