@@ -16,50 +16,66 @@ selected_cols = [
 app = Flask(__name__)
 
 # Get data from API
-def get_data(url, selected_cols, chunk_size=10000):
+def get_data(url, selected_cols, interval_minutes=60):
     try:
-        # Instead of retrieving all data at once, use a generator
-        data_chunks = requests.get(url, stream=True)
-        data_chunks.raise_for_status()
+        # Define variables
+        all_results = []
+        start_time = datetime.datetime.fromisoformat(request.args.get('start_date') + "T" + request.args.get('start_time'))
+        end_time = datetime.datetime.fromisoformat(request.args.get('end_date') + "T" + request.args.get('end_time'))
 
-        # Initialize an empty DataFrame
-        df_result = pd.DataFrame()
+        current_start_time = start_time
 
-        for chunk in data_chunks.iter_content(chunk_size):
-            data = json.loads(chunk)['data']['result']
-            df = pd.json_normalize(data)
+        while current_start_time < end_time:
+            current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_time)
+            query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z"
+            
+            try:
+                response = requests.get(query_url)
+                response.raise_for_status()
+                data = response.json()['data']['result']
 
-            if 'values' in df.columns:
-                df = df.explode('values')
-                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['values'].apply(lambda x: x[1])
-                df = df.drop(columns="values")
-            elif 'value' in df.columns:
-                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['value'].apply(lambda x: x[1])
+                df = pd.json_normalize(data)
 
-            df = df.rename(columns={
-                "metric.__name__": "metric_name",
-                "metric.exported_job": "station",
-            })
+                if 'values' in df.columns:
+                    df = df.explode('values')
+                    df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                    df['value'] = df['values'].apply(lambda x: x[1])
+                    df = df.drop(columns="values")
+                elif 'value' in df.columns:
+                    df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                    df['value'] = df['value'].apply(lambda x: x[1])
 
-            df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-            df = df[df['station'].notnull()]
+                df = df.rename(columns={
+                    "metric.__name__": "metric_name",
+                    "metric.exported_job": "station",
+                })
 
-            # Process each chunk and append to the result
-            df_chunk_result = _wide_table(df, selected_cols)
-            df_result = pd.concat([df_result, df_chunk_result])
+                df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+                df = df[df['station'].notnull()]
 
-            # Convert data types and clean as needed
-            for col in selected_cols:
-                if col in df_result.columns:
-                    df_result[col] = df_result[col].astype(float)
-            if 'Latitude' in df_result.columns:
-                df_result['Latitude'].replace(0, np.nan, inplace=True)
-            if 'Longitude' in df_result.columns:
-                df_result['Longitude'].replace(0, np.nan, inplace=True)
+                df_result = _wide_table(df, selected_cols)
 
-        return df_result
+                for col in selected_cols:
+                    if col in df_result.columns:
+                        df_result[col] = df_result[col].astype(float)
+                if 'Latitude' in df_result.columns:
+                    df_result['Latitude'].replace(0, np.nan, inplace=True)
+                if 'Longitude' in df_result.columns:
+                    df_result['Longitude'].replace(0, np.nan, inplace=True)
+
+                all_results.append(df_result)
+
+            except Exception as e:
+                app.logger.error(f'Error fetching data chunk: {str(e)}')
+                raise
+
+            # Advance to the next time window
+            current_start_time = current_end_time
+
+        # Combine all results into a single DataFrame
+        final_df = pd.concat(all_results, ignore_index=True)
+        return final_df
+
     except Exception as e:
         app.logger.error(f'Error in get_data: {str(e)}')
         raise
