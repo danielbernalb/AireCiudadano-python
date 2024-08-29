@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import datetime
 import numpy as np
-import json
+import time
 
 # Constants
 selected_cols = [
@@ -16,80 +16,61 @@ selected_cols = [
 app = Flask(__name__)
 
 # Get data from API
-def get_data(url, selected_cols, interval_minutes=60):
-    try:
-        # Obtén las fechas y horas desde los argumentos de la petición o usa valores por defecto
-        start_date = request.args.get('start_date', '2024-05-09')
-        start_time = request.args.get('start_time', '08:00')
-        end_date = request.args.get('end_date', '2024-05-09')
-        end_time = request.args.get('end_time', '10:00')
+# Get data from API with time intervals
+def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
+    all_results = []
+    current_start_time = start_datetime
 
-        # Convierte a objetos datetime
+    while current_start_time < end_datetime:
+        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
+        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+        
         try:
-            start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
-            end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
-        except ValueError as e:
-            app.logger.error(f'Error in date format: {str(e)}')
-            raise ValueError("Invalid date or time format")
+            response = requests.get(query_url)
+            response.raise_for_status()
+            data = response.json()['data']['result']
+            df = pd.json_normalize(data)
 
-        # Define variables para el bucle de procesamiento de datos
-        all_results = []
-        current_start_time = start_datetime
+            if 'values' in df.columns:
+                df = df.explode('values')
+                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                df['value'] = df['values'].apply(lambda x: x[1])
+                df = df.drop(columns="values")
+            elif 'value' in df.columns:
+                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                df['value'] = df['value'].apply(lambda x: x[1])
 
-        while current_start_time < end_datetime:
-            current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
-            query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z"
-            
-            try:
-                response = requests.get(query_url)
-                response.raise_for_status()
-                data = response.json()['data']['result']
+            df = df.rename(columns={
+                "metric.__name__": "metric_name",
+                "metric.exported_job": "station",
+            })
 
-                df = pd.json_normalize(data)
+            df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+            df = df[df['station'].notnull()]
 
-                if 'values' in df.columns:
-                    df = df.explode('values')
-                    df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                    df['value'] = df['values'].apply(lambda x: x[1])
-                    df = df.drop(columns="values")
-                elif 'value' in df.columns:
-                    df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                    df['value'] = df['value'].apply(lambda x: x[1])
+            df_result = _wide_table(df, selected_cols)
 
-                df = df.rename(columns={
-                    "metric.__name__": "metric_name",
-                    "metric.exported_job": "station",
-                })
+            for col in selected_cols:
+                if col in df_result.columns:
+                    df_result[col] = df_result[col].astype(float)
+            if 'Latitude' in df_result.columns:
+                df_result['Latitude'].replace(0, np.nan, inplace=True)
+            if 'Longitude' in df_result.columns:
+                df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-                df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-                df = df[df['station'].notnull()]
+            all_results.append(df_result)
 
-                df_result = _wide_table(df, selected_cols)
+        except Exception as e:
+            app.logger.error(f'Error fetching data chunk: {str(e)}')
+            raise
 
-                for col in selected_cols:
-                    if col in df_result.columns:
-                        df_result[col] = df_result[col].astype(float)
-                if 'Latitude' in df_result.columns:
-                    df_result['Latitude'].replace(0, np.nan, inplace=True)
-                if 'Longitude' in df_result.columns:
-                    df_result['Longitude'].replace(0, np.nan, inplace=True)
+        current_start_time = current_end_time
 
-                all_results.append(df_result)
+        # Pausa para evitar sobrecarga del servidor
+        time.sleep(1)
 
-            except Exception as e:
-                app.logger.error(f'Error fetching data chunk: {str(e)}')
-                raise
-
-            # Avanza al siguiente intervalo de tiempo
-            current_start_time = current_end_time
-
-        # Combina todos los resultados en un único DataFrame
-        final_df = pd.concat(all_results, ignore_index=True)
-        return final_df
-
-    except Exception as e:
-        app.logger.error(f'Error in get_data: {str(e)}')
-        raise
+    final_df = pd.concat(all_results, ignore_index=True)
+    return final_df
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
@@ -190,20 +171,17 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Adjust start_datetime to be one hour earlier
-    start_datetime = f"{start_date}T{start_time}:00Z"
-    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
-    end_datetime = f"{end_date}T{end_time}:00Z"
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
     if aggregation_method == 'average':
         step = '1m'
     else:
         step = _get_step(step_number, step_option)
 
-    url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
-
     try:
-        obs = get_data(url, variables)
+        obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, step)
+
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
@@ -230,12 +208,9 @@ def data():
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        # Filter the results to ensure dates are within the original specified range
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
+        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
-
-        # Convert DataFrame to dictionary and replace NaN with None explicitly
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
