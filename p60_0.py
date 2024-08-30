@@ -154,14 +154,15 @@ def data():
 
     # Mantener la hora de inicio sin ajustes
     start_datetime = f"{start_date}T{start_time}:00Z"
+    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
     end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
         step = '1m'
+        url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
     else:
         step = _get_step(step_number, step_option)
-
-    url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+        url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
         obs = get_data(url, variables)
