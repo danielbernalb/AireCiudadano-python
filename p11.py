@@ -4,6 +4,7 @@ import pandas as pd
 import datetime
 import numpy as np
 import time
+from urllib.parse import quote
 
 # Constants
 selected_cols = [
