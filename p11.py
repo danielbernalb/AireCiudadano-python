@@ -189,25 +189,31 @@ def data():
             'end': end_datetime.isoformat().replace('+00:00', 'Z'),
             'step': step
         }
-        
+
         # Construir la URL de consulta correctamente
         query_url = f"{base_url}/query_range?{urlencode(params)}"
-        
+
         # Imprimir la URL para depuración
         print(f"Query URL: {query_url}")
-        
+
         # Realizar la solicitud a Prometheus
         response = requests.get(query_url)
         response.raise_for_status()  # Esto levantará una excepción para códigos de estado HTTP no exitosos
-        
+
         # Imprimir la respuesta para depuración
         print(f"Response status: {response.status_code}")
         print(f"Response content: {response.text[:1000]}...")  # Primeros 1000 caracteres
-        
+
         data = response.json()['data']['result']
+
+        # Aquí deberías procesar los datos y crear un DataFrame
+        # Por ejemplo:
+        df = get_data(query_url, variables, start_datetime, end_datetime, step)
         
-        # Procesar los datos...
-        # (El resto del procesamiento de datos permanece igual)
+        # Convertir el DataFrame a un diccionario y luego a JSON
+        result = df.to_dict(orient='records')
+        
+        return jsonify(result)
 
     except requests.RequestException as e:
         app.logger.error(f'Error in Prometheus query: {str(e)}')
