@@ -152,7 +152,7 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # No se ajusta la hora de inicio, se usa directamente
+    # Mantener la hora de inicio sin ajustes
     start_datetime = f"{start_date}T{start_time}:00Z"
     end_datetime = f"{end_date}T{end_time}:00Z"
 
@@ -169,7 +169,16 @@ def data():
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-        if aggregation_method == 'average':
+        if aggregation_method == 'step':
+            # Convertir la columna 'date' a tipo datetime
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            
+            # Filtrar el primer intervalo para incluir la hora de inicio exacta
+            mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
+            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
+            obs = obs[mask_start | mask_step]
+
+        elif aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
