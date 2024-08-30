@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 import requests
 import pandas as pd
 import datetime
@@ -15,7 +15,6 @@ selected_cols = [
 # Flask application
 app = Flask(__name__)
 
-# Get data from API
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
     all_results = []
@@ -197,12 +196,12 @@ def data():
             end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
+                current_time = start_time_dt + pd.Timedelta(hours=1)
+                while current_time <= end_time_dt + pd.Timedelta(minutes=1):
                     mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_avg['date'] = (current_time - pd.Timedelta(minutes=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
                     hourly_obs.append(hourly_avg)
                     current_time += pd.Timedelta(hours=1)
 
