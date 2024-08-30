@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 78:</label><br>
+            <label for="variables">Select variables 79:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -170,10 +170,8 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Adjust start_datetime to be one hour earlier
-    start_datetime = f"{start_date}T{start_time}:00Z"
-    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
-    end_datetime = f"{end_date}T{end_time}:00Z"
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
     if aggregation_method == 'average':
         step = '1m'
@@ -181,7 +179,7 @@ def data():
         step = _get_step(step_number, step_option)
 
     try:
-        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}", variables, start_datetime, end_datetime, step)
+        obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, step)
 
         if station_filter:
             filters = station_filter.split(',')
