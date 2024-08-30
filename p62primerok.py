@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 83:</label><br>
+            <label for="variables">Select variables 84cambios:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -171,9 +171,9 @@ def data():
     station_filter = request.form.get('station_filter', '')
 
     # Ajustar start_datetime a una hora antes
-    start_datetime = f"{start_date}T{start_time}:00Z"
-    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
-    end_datetime = f"{end_date}T{end_time}:00Z"
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
     if aggregation_method == 'average':
         step = '1m'
@@ -182,7 +182,7 @@ def data():
 
     try:
         # Utiliza el datetime ajustado para obtener los datos
-        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}", variables, start_datetime_adjusted, end_datetime, step)
+        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted.isoformat()}Z&end={end_datetime.isoformat()}Z&step={step}", variables, start_datetime_adjusted, end_datetime, step)
 
         if station_filter:
             filters = station_filter.split(',')
@@ -195,24 +195,20 @@ def data():
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            start_time_dt = pd.to_datetime(start_datetime, utc=True)
-            end_time_dt = pd.to_datetime(end_datetime, utc=True)
-
-            for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
-                    start_interval = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-                    end_interval = current_time
-                    mask = (group.index.get_level_values('date') >= start_interval) & (group.index.get_level_values('date') < end_interval)
-                    hourly_avg = group.loc[mask].mean()
-                    hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    hourly_obs.append(hourly_avg)
-                    current_time += pd.Timedelta(hours=1)
+            current_time = start_datetime
+            while current_time <= end_datetime:
+                start_interval = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+                end_interval = current_time
+                mask = (obs.index.get_level_values('date') >= start_interval) & (obs.index.get_level_values('date') < end_interval)
+                hourly_avg = obs.loc[mask].mean()
+                hourly_avg['station'] = station
+                hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                hourly_obs.append(hourly_avg)
+                current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
+        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
         json_data = obs.to_dict(orient='records')
