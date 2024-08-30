@@ -206,7 +206,7 @@ def data():
                     hourly_obs.append(hourly_avg)
                     current_time += pd.Timedelta(hours=1)
 
-            obs = pd.DataFrame(hourly_obs).reset_index(drop=True
+            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
