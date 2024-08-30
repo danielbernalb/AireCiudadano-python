@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 87:</label><br>
+            <label for="variables">Select variables 88:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -170,12 +170,11 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+    start_datetime = pd.to_datetime(f"{start_date}T{start_time}").tz_localize('UTC')
+    end_datetime = pd.to_datetime(f"{end_date}T{end_time}").tz_localize('UTC')
 
-    # Ajustamos el tiempo de inicio para capturar la hora completa anterior
     if aggregation_method == 'average':
-        query_start = start_datetime - datetime.timedelta(hours=1, minutes=59, seconds=59)
+        query_start = start_datetime - pd.Timedelta(hours=1, minutes=59, seconds=59)
         step = '1m'
     else:
         query_start = start_datetime
@@ -198,7 +197,7 @@ def data():
             for station, group in obs.groupby('station'):
                 current_time = start_datetime
                 while current_time <= end_datetime:
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    mask = (group.index.get_level_values('date') > (current_time - pd.Timedelta(hours=1))) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
                     hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
