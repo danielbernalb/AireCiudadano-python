@@ -15,7 +15,6 @@ selected_cols = [
 # Flask application
 app = Flask(__name__)
 
-# Get data from API
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
     all_results = []
@@ -24,7 +23,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
-        
+
         try:
             response = requests.get(query_url)
             response.raise_for_status()
@@ -106,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 81:</label><br>
+            <label for="variables">Select variables 82:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -199,11 +198,17 @@ def data():
             for station, group in obs.groupby('station'):
                 current_time = start_time_dt
                 while current_time <= end_time_dt:
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    # Ajuste para que el rango sea de :01 de la hora anterior a :00 de la hora actual
+                    start_interval = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
+                    end_interval = current_time
+                    mask = (group.index.get_level_values('date') >= start_interval) & (group.index.get_level_values('date') <= end_interval)
+
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
                     hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
                     hourly_obs.append(hourly_avg)
+
+                    # Incrementar al siguiente intervalo de hora
                     current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
