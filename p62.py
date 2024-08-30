@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 79:</label><br>
+            <label for="variables">Select variables 80:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -196,16 +196,17 @@ def data():
             end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
-                current_time = start_time_dt + pd.Timedelta(hours=1)
-                while current_time <= end_time_dt + pd.Timedelta(minutes=1):
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                current_time = start_time_dt
+                while current_time <= end_time_dt:
+                    # Calcular el promedio desde el minuto 01 de la hora anterior hasta el minuto 00 de la hora actual
+                    mask = (group.index.get_level_values('date') >= current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
-                    hourly_avg['date'] = (current_time - pd.Timedelta(minutes=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:00:00Z')  # Ajustar el formato de fecha para reflejar el inicio de la hora
                     hourly_obs.append(hourly_avg)
                     current_time += pd.Timedelta(hours=1)
 
-            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+            obs = pd.DataFrame(hourly_obs).reset_index(drop=True
 
         obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
