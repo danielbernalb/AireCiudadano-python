@@ -23,7 +23,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
-
+        
         try:
             response = requests.get(query_url)
             response.raise_for_status()
@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 84cambios:</label><br>
+            <label for="variables">Select variables 85:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -170,10 +170,10 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Ajustar start_datetime a una hora antes
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    # Ajustar start_datetime a una hora antes y convertir a UTC
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}").replace(tzinfo=datetime.timezone.utc)
     start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}").replace(tzinfo=datetime.timezone.utc)
 
     if aggregation_method == 'average':
         step = '1m'
@@ -182,7 +182,7 @@ def data():
 
     try:
         # Utiliza el datetime ajustado para obtener los datos
-        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted.isoformat()}Z&end={end_datetime.isoformat()}Z&step={step}", variables, start_datetime_adjusted, end_datetime, step)
+        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted.isoformat()}&end={end_datetime.isoformat()}&step={step}", variables, start_datetime_adjusted, end_datetime, step)
 
         if station_filter:
             filters = station_filter.split(',')
