@@ -180,10 +180,9 @@ def data():
     else:
         step = _get_step(step_number, step_option)
 
-    url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
-
     try:
-        obs = get_data(url, variables)
+        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}", variables, start_datetime, end_datetime, step)
+
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
@@ -199,23 +198,20 @@ def data():
             end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
             for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
+                current_time = start_time_dt + pd.Timedelta(hours=1)
+                while current_time <= end_time_dt + pd.Timedelta(minutes=1):
                     mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_avg['date'] = (current_time - pd.Timedelta(minutes=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
                     hourly_obs.append(hourly_avg)
                     current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        # Filter the results to ensure dates are within the original specified range
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
+        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
-
-        # Convert DataFrame to dictionary and replace NaN with None explicitly
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
