@@ -170,19 +170,18 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Ajustar start_datetime a una hora antes y convertir a UTC
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}").replace(tzinfo=datetime.timezone.utc)
-    start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}").replace(tzinfo=datetime.timezone.utc)
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
+    # Ajustamos el tiempo de inicio para capturar la hora completa anterior
     if aggregation_method == 'average':
+        start_datetime = start_datetime - datetime.timedelta(hours=1)
         step = '1m'
     else:
         step = _get_step(step_number, step_option)
 
     try:
-        # Utiliza el datetime ajustado para obtener los datos
-        obs = get_data(f"{base_url}/query_range?query={query}&start={start_datetime_adjusted.isoformat()}&end={end_datetime.isoformat()}&step={step}", variables, start_datetime_adjusted, end_datetime, step)
+        obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, step)
 
         if station_filter:
             filters = station_filter.split(',')
@@ -195,19 +194,22 @@ def data():
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            current_time = start_datetime
-            while current_time <= end_datetime:
-                start_interval = current_time - pd.Timedelta(hours=1) + pd.Timedelta(minutes=1)
-                end_interval = current_time
-                mask = (obs.index.get_level_values('date') >= start_interval) & (obs.index.get_level_values('date') < end_interval)
-                hourly_avg = obs.loc[mask].mean()
-                hourly_avg['station'] = station
-                hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                hourly_obs.append(hourly_avg)
-                current_time += pd.Timedelta(hours=1)
+            start_time_dt = pd.to_datetime(start_datetime, utc=True) + pd.Timedelta(hours=1)
+            end_time_dt = pd.to_datetime(end_datetime, utc=True)
+
+            for station, group in obs.groupby('station'):
+                current_time = start_time_dt
+                while current_time <= end_time_dt:
+                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    hourly_avg = group.loc[mask].mean()
+                    hourly_avg['station'] = station
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_obs.append(hourly_avg)
+                    current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
+        # Filtramos para mantener solo los registros dentro del rango solicitado originalmente
         obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
