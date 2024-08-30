@@ -159,7 +159,7 @@ def index():
 def data():
     variables = request.form.getlist('variables')
     base_url = "http://194.242.56.226:30000/api/v1"
-    query = '{job%3D"pushgateway"}'
+    query = '{job="pushgateway"}'
 
     start_date = request.form['start_date']
     start_time = request.form['start_time']
@@ -181,7 +181,34 @@ def data():
         step = _get_step(step_number, step_option)
 
     try:
-        obs = get_data(f"{base_url}/query_range?query={query}", variables, query_start, end_datetime, step)
+        # Construir la URL de consulta correctamente
+        encoded_query = quote(query)
+        query_url = f"{base_url}/query_range?query={encoded_query}&start={query_start.isoformat()}&end={end_datetime.isoformat()}&step={step}"
+        
+        # Realizar la solicitud a Prometheus
+        response = requests.get(query_url)
+        response.raise_for_status()  # Esto levantará una excepción para códigos de estado HTTP no exitosos
+        data = response.json()['data']['result']
+        
+        # Procesar los datos...
+        obs = pd.json_normalize(data)
+        
+        if 'values' in obs.columns:
+            obs = obs.explode('values')
+            obs['date'] = obs['values'].apply(lambda x: pd.to_datetime(x[0], unit='s', utc=True))
+            obs['value'] = obs['values'].apply(lambda x: x[1])
+            obs = obs.drop(columns="values")
+        elif 'value' in obs.columns:
+            obs['date'] = obs['value'].apply(lambda x: pd.to_datetime(x[0], unit='s', utc=True))
+            obs['value'] = obs['value'].apply(lambda x: x[1])
+
+        obs = obs.rename(columns={
+            "metric.__name__": "metric_name",
+            "metric.exported_job": "station",
+        })
+
+        obs = obs.drop(columns=[col for col in obs.columns if "metric." in col]).reset_index(drop=True)
+        obs = obs[obs['station'].notnull()]
 
         if station_filter:
             filters = station_filter.split(',')
@@ -224,9 +251,12 @@ def data():
             'total_records': total_records,
             'data': grouped_data
         })
+    except requests.RequestException as e:
+        app.logger.error(f'Error in Prometheus query: {str(e)}')
+        return jsonify({'error': f'Error in Prometheus query: {str(e)}'}), 400
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}')
-        return jsonify({'error': str(e)})
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
