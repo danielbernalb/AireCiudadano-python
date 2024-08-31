@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables:</label><br>
+            <label for="variables">Select variables 1:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -188,15 +188,15 @@ def data():
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
+        # Asegurarse de que la columna 'date' sea de tipo datetime
+        obs['date'] = pd.to_datetime(obs['date'], utc=True)
+
         if aggregation_method == 'step':
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            
             mask_start = obs['date'] == start_datetime.replace(tzinfo=datetime.timezone.utc)
             mask_step = (obs['date'] > start_datetime.replace(tzinfo=datetime.timezone.utc)) & (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))
             obs = obs[mask_start | mask_step]
 
         elif aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
             obs = obs.apply(pd.to_numeric, errors='coerce')
@@ -209,21 +209,26 @@ def data():
                 for station in obs.index.get_level_values('station').unique():
                     station_avg = hourly_avg.copy()
                     station_avg['station'] = station
-                    station_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    station_avg['date'] = current_time
                     hourly_obs.append(station_avg)
                 current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        obs = obs[(obs['date'] >= start_datetime.replace(tzinfo=datetime.timezone.utc)) & (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))]
+        # Filtrar las observaciones dentro del rango de fechas especificado
+        obs = obs[(obs['date'] >= start_datetime.replace(tzinfo=datetime.timezone.utc)) & 
+                  (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))]
 
         total_records = obs.shape[0]
 
+        # Convertir DataFrame a diccionario
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
                 if pd.isna(value):
                     record[key] = None
+                elif isinstance(value, pd.Timestamp):
+                    record[key] = value.isoformat()
 
         grouped_data = {}
         for record in json_data:
