@@ -1,3 +1,5 @@
+# Union de ambos codigos sugeridos por Claude
+
 from flask import Flask, request, jsonify, render_template_string
 import requests
 import pandas as pd
@@ -105,7 +107,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 75:</label><br>
+            <label for="variables">Select variables 620:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -183,7 +185,7 @@ def data():
         url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
-        obs = get_data(url, variables)
+        obs = get_data(url, variables, datetime.datetime.fromisoformat(start_datetime[:-1]), datetime.datetime.fromisoformat(end_datetime[:-1]), step)
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
