@@ -1,11 +1,11 @@
-# p60_2
+# p1okreset: Codigo OK en todo, pero se resetea con gran cantidad de datos
 
 from flask import Flask, request, jsonify, render_template_string
 import requests
 import pandas as pd
 import datetime
 import numpy as np
-import time
+import json
 
 # Constants
 selected_cols = [
@@ -17,61 +17,43 @@ selected_cols = [
 # Flask application
 app = Flask(__name__)
 
-# Get data from API with time intervals
-def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
-    all_results = []
-    current_start_time = start_datetime
+# Get data from API
+def get_data(url, selected_cols):
+    try:
+        data = requests.get(url).json()['data']['result']
+        df = pd.json_normalize(data)
 
-    while current_start_time < end_datetime:
-        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
-        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
-        
-        try:
-            response = requests.get(query_url)
-            response.raise_for_status()
-            data = response.json()['data']['result']
-            df = pd.json_normalize(data)
+        if 'values' in df.columns:
+            df = df.explode('values')
+            df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+            df['value'] = df['values'].apply(lambda x: x[1])
+            df = df.drop(columns="values")
+        elif 'value' in df.columns:
+            df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+            df['value'] = df['value'].apply(lambda x: x[1])
 
-            if 'values' in df.columns:
-                df = df.explode('values')
-                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['values'].apply(lambda x: x[1])
-                df = df.drop(columns="values")
-            elif 'value' in df.columns:
-                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['value'].apply(lambda x: x[1])
+        df = df.rename(columns={
+            "metric.__name__": "metric_name",
+            "metric.exported_job": "station",
+        })
 
-            df = df.rename(columns={
-                "metric.__name__": "metric_name",
-                "metric.exported_job": "station",
-            })
+        df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+        df = df[df['station'].notnull()]
 
-            df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-            df = df[df['station'].notnull()]
+        df_result = _wide_table(df, selected_cols)
 
-            df_result = _wide_table(df, selected_cols)
+        for col in selected_cols:
+            if col in df_result.columns:
+                df_result[col] = df_result[col].astype(float)
+        if 'Latitude' in df_result.columns:
+            df_result['Latitude'].replace(0, np.nan, inplace=True)
+        if 'Longitude' in df_result.columns:
+            df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-            for col in selected_cols:
-                if col in df_result.columns:
-                    df_result[col] = df_result[col].astype(float)
-            if 'Latitude' in df_result.columns:
-                df_result['Latitude'].replace(0, np.nan, inplace=True)
-            if 'Longitude' in df_result.columns:
-                df_result['Longitude'].replace(0, np.nan, inplace=True)
-
-            all_results.append(df_result)
-
-        except Exception as e:
-            app.logger.error(f'Error fetching data chunk: {str(e)}')
-            raise
-
-        current_start_time = current_end_time
-
-        # Pausa para evitar sobrecarga del servidor
-        time.sleep(1)
-
-    final_df = pd.concat(all_results, ignore_index=True)
-    return final_df
+        return df_result
+    except Exception as e:
+        app.logger.error(f'Error in get_data: {str(e)}')
+        raise
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
@@ -107,7 +89,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 1:</label><br>
+            <label for="variables">Select variables 600:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -143,7 +125,7 @@ def index():
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
             </select><br><br>
             <label for="station_filter">Station Filter:</label>
-            <input type="text" id="station_filter" name="station_filter" value="{{ station_filter }}"><br><br>
+            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
             <input type="submit" value="Submit">
         </form>
         <script>
@@ -155,7 +137,7 @@ def index():
             }
         </script>
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date, start_time=start_time,
-       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method, station_filter=station_filter)
+       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -172,65 +154,66 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}:00")
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}:00")
+    # Mantener la hora de inicio sin ajustes
+    start_datetime = f"{start_date}T{start_time}:00Z"
+    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
+    end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
         step = '1m'
-        start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
-        url = f"{base_url}/query_range?query={query}"
+        url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
     else:
         step = _get_step(step_number, step_option)
-        start_datetime_adjusted = start_datetime
-        url = f"{base_url}/query_range?query={query}"
+        url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
-        obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step)
+        obs = get_data(url, variables)
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-        # Asegurarse de que la columna 'date' sea de tipo datetime
-        obs['date'] = pd.to_datetime(obs['date'], utc=True)
-
         if aggregation_method == 'step':
-            mask_start = obs['date'] == start_datetime.replace(tzinfo=datetime.timezone.utc)
-            mask_step = (obs['date'] > start_datetime.replace(tzinfo=datetime.timezone.utc)) & (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))
+            # Convertir la columna 'date' a tipo datetime
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            
+            # Filtrar el primer intervalo para incluir la hora de inicio exacta
+            mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
+            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
             obs = obs[mask_start | mask_step]
 
         elif aggregation_method == 'average':
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            current_time = start_datetime.replace(tzinfo=datetime.timezone.utc)
-            while current_time <= end_datetime.replace(tzinfo=datetime.timezone.utc):
-                mask = (obs.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (obs.index.get_level_values('date') <= current_time)
-                hourly_avg = obs.loc[mask].mean()
-                for station in obs.index.get_level_values('station').unique():
-                    station_avg = hourly_avg.copy()
-                    station_avg['station'] = station
-                    station_avg['date'] = current_time
-                    hourly_obs.append(station_avg)
-                current_time += pd.Timedelta(hours=1)
+            start_time_dt = pd.to_datetime(start_datetime, utc=True)
+            end_time_dt = pd.to_datetime(end_datetime, utc=True)
+
+            for station, group in obs.groupby('station'):
+                current_time = start_time_dt
+                while current_time <= end_time_dt:
+                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    hourly_avg = group.loc[mask].mean()
+                    hourly_avg['station'] = station
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_obs.append(hourly_avg)
+                    current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        # Filtrar las observaciones dentro del rango de fechas especificado
-        obs = obs[(obs['date'] >= start_datetime.replace(tzinfo=datetime.timezone.utc)) & 
-                  (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))]
+        # Filtro para asegurar que las fechas estén dentro del rango especificado
+        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
 
         total_records = obs.shape[0]
 
-        # Convertir DataFrame a diccionario
+        # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
                 if pd.isna(value):
                     record[key] = None
-                elif isinstance(value, pd.Timestamp):
-                    record[key] = value.isoformat()
 
         grouped_data = {}
         for record in json_data:
