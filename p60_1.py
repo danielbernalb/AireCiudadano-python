@@ -1,4 +1,4 @@
-# Union de ambos codigos sugeridos por Claude
+# p60_1: opcion Union de ambos codigos sugeridos por Claude
 
 from flask import Flask, request, jsonify, render_template_string
 import requests
@@ -107,7 +107,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 620:</label><br>
+            <label for="variables">Select variables 6010:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -185,6 +185,9 @@ def data():
         url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
+        # Original
+        # obs = get_data(url, variables)
+        # Sugerido por Claude
         obs = get_data(url, variables, datetime.datetime.fromisoformat(start_datetime[:-1]), datetime.datetime.fromisoformat(end_datetime[:-1]), step)
         if station_filter:
             filters = station_filter.split(',')
