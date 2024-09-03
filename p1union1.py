@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import datetime
 import numpy as np
+import json
 import time
 
 # Constants
@@ -17,19 +18,18 @@ selected_cols = [
 # Flask application
 app = Flask(__name__)
 
-# Get data from API with time intervals
-def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
-    all_results = []
-    current_start_time = start_datetime
-
-    while current_start_time < end_datetime:
-        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
-        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+# Get data from API
+def get_data(url, selected_cols, start_time, end_time):
+    all_data = []
+    current_start = start_time
+    
+    while current_start < end_time:
+        current_end = min(current_start + datetime.timedelta(minutes=60), end_time)
+        
+        current_url = f"{url}&start={current_start.isoformat()}Z&end={current_end.isoformat()}Z"
         
         try:
-            response = requests.get(query_url)
-            response.raise_for_status()
-            data = response.json()['data']['result']
+            data = requests.get(current_url).json()['data']['result']
             df = pd.json_normalize(data)
 
             if 'values' in df.columns:
@@ -49,29 +49,30 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
             df = df[df['station'].notnull()]
 
-            df_result = _wide_table(df, selected_cols)
-
-            for col in selected_cols:
-                if col in df_result.columns:
-                    df_result[col] = df_result[col].astype(float)
-            if 'Latitude' in df_result.columns:
-                df_result['Latitude'].replace(0, np.nan, inplace=True)
-            if 'Longitude' in df_result.columns:
-                df_result['Longitude'].replace(0, np.nan, inplace=True)
-
-            all_results.append(df_result)
-
+            all_data.append(df)
+            
+            time.sleep(1)  # Pausa de 1 segundo después de cada solicitud
+            
         except Exception as e:
-            app.logger.error(f'Error fetching data chunk: {str(e)}')
+            app.logger.error(f'Error in get_data: {str(e)}')
             raise
 
-        current_start_time = current_end_time
+        current_start = current_end
 
-        # Pausa para evitar sobrecarga del servidor
-        time.sleep(1)
+    # Concatenar todos los DataFrames
+    df_combined = pd.concat(all_data, ignore_index=True)
+    
+    df_result = _wide_table(df_combined, selected_cols)
 
-    final_df = pd.concat(all_results, ignore_index=True)
-    return final_df
+    for col in selected_cols:
+        if col in df_result.columns:
+            df_result[col] = df_result[col].astype(float)
+    if 'Latitude' in df_result.columns:
+        df_result['Latitude'].replace(0, np.nan, inplace=True)
+    if 'Longitude' in df_result.columns:
+        df_result['Longitude'].replace(0, np.nan, inplace=True)
+
+    return df_result
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
@@ -107,7 +108,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 6010:</label><br>
+            <label for="variables">Select variables p1okreset 10:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -172,35 +173,26 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Mantener la hora de inicio sin ajustes
-    start_datetime = f"{start_date}T{start_time}:00Z"
-    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
-    end_datetime = f"{end_date}T{end_time}:00Z"
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}:00")
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}:00")
 
     if aggregation_method == 'average':
         step = '1m'
-        url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
     else:
         step = _get_step(step_number, step_option)
-        url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+
+    url = f"{base_url}/query_range?query={query}&step={step}"
 
     try:
-        # Original
-        # obs = get_data(url, variables)
-        # Sugerido por Claude
-        obs = get_data(url, variables, datetime.datetime.fromisoformat(start_datetime[:-1]), datetime.datetime.fromisoformat(end_datetime[:-1]), step)
+        obs = get_data(url, variables, start_datetime, end_datetime)
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         if aggregation_method == 'step':
-            # Convertir la columna 'date' a tipo datetime
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            
-            # Filtrar el primer intervalo para incluir la hora de inicio exacta
-            mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
-            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
-            obs = obs[mask_start | mask_step]
+            mask = (obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)
+            obs = obs[mask]
 
         elif aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
@@ -209,12 +201,9 @@ def data():
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            start_time_dt = pd.to_datetime(start_datetime, utc=True)
-            end_time_dt = pd.to_datetime(end_datetime, utc=True)
-
             for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
+                current_time = start_datetime
+                while current_time <= end_datetime:
                     mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
                     hourly_avg = group.loc[mask].mean()
                     hourly_avg['station'] = station
@@ -224,12 +213,8 @@ def data():
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        # Filtro para asegurar que las fechas estén dentro del rango especificado
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
-
         total_records = obs.shape[0]
 
-        # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
