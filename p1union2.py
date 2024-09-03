@@ -1,5 +1,7 @@
 # p1union2
 
+# p1nooknoreset: Codigo mal en datos, pero no se resetea con gran cantidad de datos
+
 from flask import Flask, request, jsonify, render_template_string
 import requests
 import pandas as pd
@@ -107,7 +109,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables 1:</label><br>
+            <label for="variables">Select variables p1nooknoreset 100:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -143,7 +145,7 @@ def index():
                 <option value="weeks" {% if step_option == 'weeks' %}selected{% endif %}>Weeks</option>
             </select><br><br>
             <label for="station_filter">Station Filter:</label>
-            <input type="text" id="station_filter" name="station_filter" value="{{ station_filter }}"><br><br>
+            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
             <input type="submit" value="Submit">
         </form>
         <script>
@@ -155,7 +157,7 @@ def index():
             }
         </script>
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date, start_time=start_time,
-       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method, station_filter=station_filter)
+       end_date=end_date, end_time=end_time, step_number=step_number, step_option=step_option, aggregation_method=aggregation_method)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -172,65 +174,51 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}:00")
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}:00")
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
     if aggregation_method == 'average':
         step = '1m'
-        start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
-        url = f"{base_url}/query_range?query={query}"
     else:
         step = _get_step(step_number, step_option)
-        start_datetime_adjusted = start_datetime
-        url = f"{base_url}/query_range?query={query}"
 
     try:
-        obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step)
+        obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, step)
+
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-        # Asegurarse de que la columna 'date' sea de tipo datetime
-        obs['date'] = pd.to_datetime(obs['date'], utc=True)
-
-        if aggregation_method == 'step':
-            mask_start = obs['date'] == start_datetime.replace(tzinfo=datetime.timezone.utc)
-            mask_step = (obs['date'] > start_datetime.replace(tzinfo=datetime.timezone.utc)) & (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))
-            obs = obs[mask_start | mask_step]
-
-        elif aggregation_method == 'average':
+        if aggregation_method == 'average':
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
 
-            current_time = start_datetime.replace(tzinfo=datetime.timezone.utc)
-            while current_time <= end_datetime.replace(tzinfo=datetime.timezone.utc):
-                mask = (obs.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (obs.index.get_level_values('date') <= current_time)
-                hourly_avg = obs.loc[mask].mean()
-                for station in obs.index.get_level_values('station').unique():
-                    station_avg = hourly_avg.copy()
-                    station_avg['station'] = station
-                    station_avg['date'] = current_time
-                    hourly_obs.append(station_avg)
-                current_time += pd.Timedelta(hours=1)
+            start_time_dt = pd.to_datetime(start_datetime, utc=True)
+            end_time_dt = pd.to_datetime(end_datetime, utc=True)
+
+            for station, group in obs.groupby('station'):
+                current_time = start_time_dt
+                while current_time <= end_time_dt:
+                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                    hourly_avg = group.loc[mask].mean()
+                    hourly_avg['station'] = station
+                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                    hourly_obs.append(hourly_avg)
+                    current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        # Filtrar las observaciones dentro del rango de fechas especificado
-        obs = obs[(obs['date'] >= start_datetime.replace(tzinfo=datetime.timezone.utc)) & 
-                  (obs['date'] <= end_datetime.replace(tzinfo=datetime.timezone.utc))]
+        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
-
-        # Convertir DataFrame a diccionario
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
                 if pd.isna(value):
                     record[key] = None
-                elif isinstance(value, pd.Timestamp):
-                    record[key] = value.isoformat()
 
         grouped_data = {}
         for record in json_data:
