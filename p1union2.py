@@ -1,10 +1,11 @@
-# p1union2
+# p1union2: union ok en data pero se resetea
 
 from flask import Flask, request, jsonify, render_template_string
 import requests
 import pandas as pd
 import datetime
 import numpy as np
+import json
 import time
 
 # Constants
@@ -21,6 +22,8 @@ app = Flask(__name__)
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
     all_results = []
     current_start_time = start_datetime
+    current_start_time = pd.to_datetime(current_start_time)
+    end_datetime = pd.to_datetime(end_datetime)
 
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
@@ -107,7 +110,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables p1nooknoreset 100:</label><br>
+            <label for="variables">Select variables p1union2 1:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -172,22 +175,34 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
-    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+    # Mantener la hora de inicio sin ajustes
+    start_datetime = f"{start_date}T{start_time}:00Z"
+    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
+    end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
         step = '1m'
+        url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
     else:
         step = _get_step(step_number, step_option)
+        url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
 
     try:
-        obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, step)
-
+        obs = get_data(url, variables, start_datetime, end_datetime, step)
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-        if aggregation_method == 'average':
+        if aggregation_method == 'step':
+            # Convertir la columna 'date' a tipo datetime
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            
+            # Filtrar el primer intervalo para incluir la hora de inicio exacta
+            mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
+            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
+            obs = obs[mask_start | mask_step]
+
+        elif aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
 
@@ -209,9 +224,12 @@ def data():
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
-        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
+        # Filtro para asegurar que las fechas estén dentro del rango especificado
+        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
 
         total_records = obs.shape[0]
+
+        # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
