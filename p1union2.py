@@ -70,9 +70,6 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
 
         current_start_time = current_end_time
 
-        # Pausa para evitar sobrecarga del servidor
-        time.sleep(1)
-
     final_df = pd.concat(all_results, ignore_index=True)
     return final_df
 
@@ -110,7 +107,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables p1union2 1:</label><br>
+            <label for="variables">Select variables p1union2 7:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -175,20 +172,23 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Mantener la hora de inicio sin ajustes
-    start_datetime = f"{start_date}T{start_time}:00Z"
-    start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
-    end_datetime = f"{end_date}T{end_time}:00Z"
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
+    end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
     if aggregation_method == 'average':
         step = '1m'
-        url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
     else:
         step = _get_step(step_number, step_option)
-        url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
+
+    url = f"{base_url}/query_range?query={query}"
 
     try:
-        obs = get_data(url, variables, start_datetime, end_datetime, step)
+        if aggregation_method == 'average':
+            obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step)
+        else:
+            obs = get_data(url, variables, start_datetime, end_datetime, step)
+
         if station_filter:
             filters = station_filter.split(',')
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
@@ -225,7 +225,8 @@ def data():
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         # Filtro para asegurar que las fechas estén dentro del rango especificado
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
+#        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
+        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
 

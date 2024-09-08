@@ -25,7 +25,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
-        
+
         try:
             response = requests.get(query_url)
             response.raise_for_status()
@@ -68,7 +68,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
         current_start_time = current_end_time
 
         # Pausa para evitar sobrecarga del servidor
-        time.sleep(1)
+#        time.sleep(1)
 
     final_df = pd.concat(all_results, ignore_index=True)
     return final_df
