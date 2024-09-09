@@ -21,12 +21,9 @@ app = Flask(__name__)
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
     all_results = []
-#    current_start_time = pd.to_datetime(start_datetime)
-#    current_end_time = pd.to_datetime(end_datetime)
-
+    current_start_time = start_datetime
     while current_start_time < end_datetime:
-        current_start_time = pd.to_datetime(start_datetime)
-        current_end_time = pd.to_datetime(end_datetime)
+        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
         try:
@@ -107,7 +104,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables p1union2 9:</label><br>
+            <label for="variables">Select variables p1union2 1:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
