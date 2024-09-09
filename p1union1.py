@@ -24,7 +24,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     current_start_time = start_datetime
     while current_start_time < end_datetime:
         current_end_time = pd.to_datetime(end_datetime)
-        
+
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
         try:
@@ -105,7 +105,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables p1union1 1:</label><br>
+            <label for="variables">Select variables p1union1 10:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -250,4 +250,4 @@ def data():
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5003)
