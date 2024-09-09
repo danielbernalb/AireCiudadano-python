@@ -10,9 +10,7 @@ import time
 
 # Constants
 selected_cols = [
-    "PM25", "PM25raw", "PM251", "PM252", "PM1", "CO2", "VOC", "NOx",
-    "Humidity", "Temperature", "Noise", "NoisePeak", "RSSI", "Latitude",
-    "Longitude", "InOut",
+    "PM25", "PM25raw", "PM1", "Humidity", "Temperature",
 ]
 
 # Flask application
@@ -105,7 +103,9 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables p1union1 10:</label><br>
+            <h2>API AIRECIUDADANO v1.0</h2><br>
+            <h3>Instrucciones en aireciudadano.com/api</h3><br>
+            <label for="variables">Select variables pok 1:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -158,7 +158,7 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30000/api/v1"
+    base_url = "http://sensor.aireciudadano.com:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
     start_date = request.form['start_date']
@@ -221,9 +221,6 @@ def data():
                     current_time += pd.Timedelta(hours=1)
 
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
-
-        # Filtro para asegurar que las fechas estén dentro del rango especificado
-#        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
 
