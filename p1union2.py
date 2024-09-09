@@ -26,7 +26,8 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     end_datetime = pd.to_datetime(end_datetime)
 
     while current_start_time < end_datetime:
-        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
+#        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
+        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime + datetime.timedelta(minutes=1))
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
         
         try:
