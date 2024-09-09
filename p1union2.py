@@ -1,4 +1,4 @@
-# p1union2: union ok en data pero se resetea
+# p1union2: union no ok en data pero ya no se resetea
 
 from flask import Flask, request, jsonify, render_template_string
 import requests
