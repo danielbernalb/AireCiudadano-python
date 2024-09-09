@@ -21,13 +21,14 @@ app = Flask(__name__)
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
     all_results = []
-    current_start_time = start_datetime
-    current_start_time = pd.to_datetime(current_start_time)
+#    current_start_time = pd.to_datetime(start_datetime)
+#    current_end_time = pd.to_datetime(end_datetime)
 
     while current_start_time < end_datetime:
-        current_end_time = end_datetime
+        current_start_time = pd.to_datetime(start_datetime)
+        current_end_time = pd.to_datetime(end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
-        
+
         try:
             response = requests.get(query_url)
             response.raise_for_status()
