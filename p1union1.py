@@ -1,4 +1,4 @@
-# p1union1: test
+# p1union1: parece todo OK
 
 from flask import Flask, request, jsonify, render_template_string
 import requests
@@ -19,11 +19,11 @@ selected_cols = [
 app = Flask(__name__)
 
 # Get data from API with time intervals
-def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
+def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds=3540):
     all_results = []
     current_start_time = start_datetime
     while current_start_time < end_datetime:
-        current_end_time = pd.to_datetime(end_datetime)
+        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_seconds), end_datetime)
 
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
@@ -194,7 +194,7 @@ def data():
         if aggregation_method == 'step':
             # Convertir la columna 'date' a tipo datetime
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            
+
             # Filtrar el primer intervalo para incluir la hora de inicio exacta
             mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
             mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
@@ -250,4 +250,4 @@ def data():
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5003)
+    app.run(debug=True, host='0.0.0.0', port=5001)
