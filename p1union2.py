@@ -224,7 +224,6 @@ def data():
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         # Filtro para asegurar que las fechas estén dentro del rango especificado
-#        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
         obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
