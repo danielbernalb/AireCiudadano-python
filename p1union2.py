@@ -106,7 +106,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables p1union2 8:</label><br>
+            <label for="variables">Select variables p1union2 9:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -224,7 +224,7 @@ def data():
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         # Filtro para asegurar que las fechas estén dentro del rango especificado
-        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
+#        obs = obs[(obs['date'] >= start_datetime.isoformat()) & (obs['date'] <= end_datetime.isoformat())]
 
         total_records = obs.shape[0]
 
