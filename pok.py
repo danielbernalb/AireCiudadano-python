@@ -21,7 +21,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
     all_results = []
     current_start_time = start_datetime
     while current_start_time < end_datetime:
-        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_seconds), end_datetime)
+        current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
 
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
