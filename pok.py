@@ -67,6 +67,8 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
         current_start_time = current_end_time
 
     final_df = pd.concat(all_results, ignore_index=True)
+#     Cambio sugerido Chatgpt
+#     final_df = pd.concat(all_results, ignore_index=True).drop_duplicates(subset=['date', 'station'])
     return final_df
 
 # Function to get wide table
@@ -196,9 +198,9 @@ def data():
             # Convertir la columna 'date' a tipo datetime
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
 
-            # Filtrar el primer intervalo para incluir la hora de inicio exacta
+            # Filtrar para incluir la hora de inicio exacta y evitar duplicados en los intervalos
             mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
-            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
+            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] < pd.to_datetime(end_datetime, utc=True)) # Cambiar <= a < para evitar duplicados
             obs = obs[mask_start | mask_step]
 
         elif aggregation_method == 'average':
