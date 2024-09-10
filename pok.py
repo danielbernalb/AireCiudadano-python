@@ -66,9 +66,9 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
 
         current_start_time = current_end_time
 
-    final_df = pd.concat(all_results, ignore_index=True)
+#    final_df = pd.concat(all_results, ignore_index=True)
 #     Cambio sugerido Chatgpt
-#     final_df = pd.concat(all_results, ignore_index=True).drop_duplicates(subset=['date', 'station'])
+    final_df = pd.concat(all_results, ignore_index=True).drop_duplicates(subset=['date', 'station'])
     return final_df
 
 # Function to get wide table
@@ -107,7 +107,7 @@ def index():
         <form action="/dataresult" method="post">
             <h2>API AIRECIUDADANO v1.0</h2>
             <h3>Instructions at: <a href="https://aireciudadano.com/apidata/" target="_blank">aireciudadano.com/apidata</a></h3><br>
-            <label for="variables">Select variables pok 4:</label><br>
+            <label for="variables">Select variables pok 5:</label><br>
             <br>
             {% for col in selected_cols %}
                 <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
@@ -200,7 +200,7 @@ def data():
 
             # Filtrar para incluir la hora de inicio exacta y evitar duplicados en los intervalos
             mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
-            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] < pd.to_datetime(end_datetime, utc=True)) # Cambiar <= a < para evitar duplicados
+            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
             obs = obs[mask_start | mask_step]
 
         elif aggregation_method == 'average':
