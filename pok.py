@@ -17,7 +17,7 @@ selected_cols = [
 app = Flask(__name__)
 
 # Get data from API with time intervals
-def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds=3539):
+def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds):
     all_results = []
     current_start_time = start_datetime
     while current_start_time < end_datetime:
@@ -104,7 +104,7 @@ def index():
     return render_template_string('''
         <form action="/dataresult" method="post">
             <h2>API AIRECIUDADANO v1.0</h2>
-            <h3>Instrucciones en: <a href="https://aireciudadano.com/apidata/" target="_blank">aireciudadano.com/apidata</a></h3><br>
+            <h3>Instructions at: <a href="https://aireciudadano.com/apidata/" target="_blank">aireciudadano.com/apidata</a></h3><br>
             <label for="variables">Select variables pok 3:</label><br>
             <br>
             {% for col in selected_cols %}
@@ -182,9 +182,11 @@ def data():
 
     try:
         if aggregation_method == 'average':
-            obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step)
+            interval_seconds=3539
+            obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step, interval_seconds)
         else:
-            obs = get_data(url, variables, start_datetime, end_datetime, step)
+            interval_seconds=3600
+            obs = get_data(url, variables, start_datetime, end_datetime, step, interval_seconds)
 
         if station_filter:
             filters = station_filter.split(',')
