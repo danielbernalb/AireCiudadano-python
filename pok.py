@@ -105,7 +105,7 @@ def index():
         <form action="/dataresult" method="post">
             <h2>API AIRECIUDADANO v1.0</h2>
             <h3>Instrucciones en aireciudadano.com/api</h3><br>
-            <label for="variables">Select variables pok 1:</label><br>
+            <label for="variables">Select variables pok 2:</label><br>
             {% for col in selected_cols %}
                 <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
                 <label for="{{ col }}">{{ col }}</label><br>
