@@ -104,8 +104,9 @@ def index():
     return render_template_string('''
         <form action="/dataresult" method="post">
             <h2>API AIRECIUDADANO v1.0</h2>
-            <h3>Instrucciones en aireciudadano.com/api</h3><br>
-            <label for="variables">Select variables pok 2:</label><br>
+            <h3>Instrucciones en: <a href="https://aireciudadano.com/apidata/" target="_blank">aireciudadano.com/apidata</a></h3><br>
+            <label for="variables">Select variables pok 3:</label><br>
+            <br>
             {% for col in selected_cols %}
                 <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
                 <label for="{{ col }}">{{ col }}</label><br>
