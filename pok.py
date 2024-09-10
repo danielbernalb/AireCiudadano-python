@@ -17,7 +17,7 @@ selected_cols = [
 app = Flask(__name__)
 
 # Get data from API with time intervals
-def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds=3540):
+def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds=3539):
     all_results = []
     current_start_time = start_datetime
     while current_start_time < end_datetime:
