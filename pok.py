@@ -103,11 +103,9 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <h2>API AIRECIUDADANO v1.0</h2><br>
+            <h2>API AIRECIUDADANO v1.0</h2>
             <h3>Instrucciones en aireciudadano.com/api</h3><br>
             <label for="variables">Select variables pok 1:</label><br>
-            <input type="checkbox" id="select_all" onclick="toggle(this);">
-            <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
                 <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
                 <label for="{{ col }}">{{ col }}</label><br>
@@ -116,11 +114,11 @@ def index():
             <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
-            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="3600" list="hour-markers"><br><br>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="3600" list="hour-markers" required><br><br>
             <label for="end_date">End date/time:</label>
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
             <label for="end_time"> / </label>
-            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="3600" list="hour-markers"><br><br>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="3600" list="hour-markers" required><br><br>
             <datalist id="hour-markers">
                 {% for hour in range(24) %}
                     <option value="{{ '%02d:00'|format(hour) }}"></option>
