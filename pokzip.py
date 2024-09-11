@@ -1,11 +1,13 @@
-# pok: parece todo OK, seguir probando
+# pokzip: probando zip, seguir probando
 
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
 import pandas as pd
 import datetime
 import numpy as np
 import json
+import os
+import zipfile
 import time
 
 # Constants
@@ -66,8 +68,6 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
 
         current_start_time = current_end_time
 
-#    final_df = pd.concat(all_results, ignore_index=True)
-#     Cambio sugerido Chatgpt
     final_df = pd.concat(all_results, ignore_index=True).drop_duplicates(subset=['date', 'station'])
     return final_df
 
@@ -143,6 +143,14 @@ def index():
             </select><br><br>
             <label for="station_filter">Station Filter:</label>
             <input type="text" id="station_filter" name="station_filter" value=""><br><br>
+
+            <!-- New option for result format -->
+            <label for="result_format">Result format:</label>
+            <select id="result_format" name="result_format">
+                <option value="screen">Result in screen</option>
+                <option value="file">Result in JSON file</option>
+            </select><br><br>
+
             <input type="submit" value="Submit">
         </form>
         <script>
@@ -169,6 +177,7 @@ def data():
     step_number = request.form['step_number']
     step_option = request.form['step_option']
     aggregation_method = request.form['aggregation_method']
+    result_format = request.form['result_format']
     station_filter = request.form.get('station_filter', '')
 
     start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
@@ -241,10 +250,28 @@ def data():
                 grouped_data[station] = []
             grouped_data[station].append(record)
 
-        return jsonify({
-            'total_records': total_records,
-            'data': grouped_data
-        })
+
+        if result_format == "screen":
+            return jsonify({
+                'total_records': total_records,
+                'data': grouped_data
+            })
+        else:
+            # Save JSON data to file
+            json_filename = 'dataresult.json'
+            with open(json_filename, 'w') as json_file:
+                json.dump(grouped_data, json_file, indent=4)
+
+            # Compress JSON file to ZIP
+            zip_filename = 'dataresult.zip'
+            with zipfile.ZipFile(zip_filename, 'w') as zipf:
+                zipf.write(json_filename, compress_type=zipfile.ZIP_DEFLATED)
+
+            # Remove the JSON file after compressing
+            os.remove(json_filename)
+
+            return send_file(zip_filename, as_attachment=True)
+
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}')
         return jsonify({'error': str(e)})
