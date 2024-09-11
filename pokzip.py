@@ -148,7 +148,6 @@ def index():
                 <option value="screen">Result in screen</option>
                 <option value="file">Result in json ZIP file</option>
             </select><br><br>
-
             <input type="submit" value="Submit">
         </form>
         <script>
