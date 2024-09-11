@@ -143,12 +143,10 @@ def index():
             </select><br><br>
             <label for="station_filter">Station Filter:</label>
             <input type="text" id="station_filter" name="station_filter" value=""><br><br>
-
-            <!-- New option for result format -->
             <label for="result_format">Result format:</label>
             <select id="result_format" name="result_format">
                 <option value="screen">Result in screen</option>
-                <option value="file">Result in JSON file</option>
+                <option value="file">Result in ZIP file</option>
             </select><br><br>
 
             <input type="submit" value="Submit">
