@@ -146,7 +146,7 @@ def index():
             <label for="result_format">Result format:</label>
             <select id="result_format" name="result_format">
                 <option value="screen">Result in screen</option>
-                <option value="file">Result in ZIP file</option>
+                <option value="file">Result in json ZIP file</option>
             </select><br><br>
 
             <input type="submit" value="Submit">
