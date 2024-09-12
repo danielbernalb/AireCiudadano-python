@@ -20,56 +20,55 @@ app = Flask(__name__)
 
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds):
-    all_results = []
-    current_start_time = start_datetime
-    while current_start_time < end_datetime:
-        current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
+       def data_generator():
+           current_start_time = start_datetime
+           while current_start_time < end_datetime:
+               current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
 
-        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+               query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
-        try:
-            response = requests.get(query_url)
-            response.raise_for_status()
-            data = response.json()['data']['result']
-            df = pd.json_normalize(data)
+               try:
+                   response = requests.get(query_url)
+                   response.raise_for_status()
+                   data = response.json()['data']['result']
+                   df = pd.json_normalize(data)
 
-            if 'values' in df.columns:
-                df = df.explode('values')
-                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['values'].apply(lambda x: x[1])
-                df = df.drop(columns="values")
-            elif 'value' in df.columns:
-                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                df['value'] = df['value'].apply(lambda x: x[1])
+                   if 'values' in df.columns:
+                       df = df.explode('values')
+                       df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                       df['value'] = df['values'].apply(lambda x: x[1])
+                       df = df.drop(columns="values")
+                   elif 'value' in df.columns:
+                       df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                       df['value'] = df['value'].apply(lambda x: x[1])
 
-            df = df.rename(columns={
-                "metric.__name__": "metric_name",
-                "metric.exported_job": "station",
-            })
+                   df = df.rename(columns={
+                       "metric.__name__": "metric_name",
+                       "metric.exported_job": "station",
+                   })
 
-            df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-            df = df[df['station'].notnull()]
+                   df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+                   df = df[df['station'].notnull()]
 
-            df_result = _wide_table(df, selected_cols)
+                   df_result = _wide_table(df, selected_cols)
 
-            for col in selected_cols:
-                if col in df_result.columns:
-                    df_result[col] = df_result[col].astype(float)
-            if 'Latitude' in df_result.columns:
-                df_result['Latitude'].replace(0, np.nan, inplace=True)
-            if 'Longitude' in df_result.columns:
-                df_result['Longitude'].replace(0, np.nan, inplace=True)
+                   for col in selected_cols:
+                       if col in df_result.columns:
+                           df_result[col] = df_result[col].astype(float)
+                   if 'Latitude' in df_result.columns:
+                       df_result['Latitude'].replace(0, np.nan, inplace=True)
+                   if 'Longitude' in df_result.columns:
+                       df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-            all_results.append(df_result)
+                   yield df_result
 
-        except Exception as e:
-            app.logger.error(f'Error fetching data chunk: {str(e)}')
-            raise
+               except Exception as e:
+                   app.logger.error(f'Error fetching data chunk: {str(e)}')
+                   raise
 
-        current_start_time = current_end_time
+               current_start_time = current_end_time
 
-    final_df = pd.concat(all_results, ignore_index=True).drop_duplicates(subset=['date', 'station'])
-    return final_df
+       return pd.concat(data_generator(), ignore_index=True).drop_duplicates(subset=['date', 'station'])
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
