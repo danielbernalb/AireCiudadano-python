@@ -175,7 +175,8 @@ def index():
             <label for="result_format">Result format:</label>
             <select id="result_format" name="result_format">
                 <option value="screen">Result in screen</option>
-                <option value="file">Result in json ZIP file</option>
+                <option value="filejson">Result in json ZIP file</option>
+                <option value="filexlsx">Result in xlsx file</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
@@ -282,7 +283,8 @@ def data():
                 'total_records': total_records,
                 'data': grouped_data
             })
-        else:
+        
+        elif result_format == "filejson":
             # Usar un directorio temporal
             with tempfile.TemporaryDirectory() as temp_dir:
                 # Generar nombres de archivo seguros
@@ -309,6 +311,19 @@ def data():
 
                 # Enviar archivo ZIP
                 return send_file(zip_path, as_attachment=True, download_name=zip_filename)
+
+        elif result_format == "filexlsx":
+            # Usar un directorio temporal
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Guardar en formato Excel (.xlsx)
+                excel_filename = secure_filename('dataresult.xlsx')
+                excel_path = os.path.join(temp_dir, excel_filename)
+
+                # Guardar el DataFrame en Excel
+                obs.to_excel(excel_path, index=False)
+
+                # Enviar archivo Excel
+                return send_file(excel_path, as_attachment=True, download_name=excel_filename)
 
     except PermissionError as e:
         app.logger.error(f'Permission error: {str(e)}')
