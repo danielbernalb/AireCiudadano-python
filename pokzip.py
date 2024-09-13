@@ -9,6 +9,9 @@ import json
 import os
 import zipfile
 import time
+import tempfile
+from werkzeug.utils import secure_filename
+import logging
 
 # Constants
 selected_cols = [
@@ -20,59 +23,77 @@ app = Flask(__name__)
 
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds):
-       def data_generator():
-           current_start_time = start_datetime
-           while current_start_time < end_datetime:
-               current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
+    def data_generator():
+        current_start_time = start_datetime
+        while current_start_time < end_datetime:
+            current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
+            query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+            
+            try:
+                response = requests.get(query_url)
+                response.raise_for_status()
+                data = response.json()['data']['result']
+                df = pd.json_normalize(data)
 
-               query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+                # Log the columns we received
+                app.logger.info(f"Columns received: {df.columns.tolist()}")
 
-               try:
-                   response = requests.get(query_url)
-                   response.raise_for_status()
-                   data = response.json()['data']['result']
-                   df = pd.json_normalize(data)
+                if 'values' in df.columns:
+                    df = df.explode('values')
+                    df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                    df['value'] = df['values'].apply(lambda x: x[1])
+                    df = df.drop(columns="values")
+                elif 'value' in df.columns:
+                    df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                    df['value'] = df['value'].apply(lambda x: x[1])
 
-                   if 'values' in df.columns:
-                       df = df.explode('values')
-                       df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                       df['value'] = df['values'].apply(lambda x: x[1])
-                       df = df.drop(columns="values")
-                   elif 'value' in df.columns:
-                       df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                       df['value'] = df['value'].apply(lambda x: x[1])
+                # Rename columns, but check if they exist first
+                rename_dict = {
+                    "metric.__name__": "metric_name",
+                    "metric.exported_job": "station",
+                }
+                df = df.rename(columns={k: v for k, v in rename_dict.items() if k in df.columns})
 
-                   df = df.rename(columns={
-                       "metric.__name__": "metric_name",
-                       "metric.exported_job": "station",
-                   })
+                # Drop columns containing 'metric.' only if they exist
+                df = df.drop(columns=[col for col in df.columns if 'metric.' in col], errors='ignore')
 
-                   df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
-                   df = df[df['station'].notnull()]
+                # Only filter for non-null 'station' if the column exists
+                if 'station' in df.columns:
+                    df = df[df['station'].notnull()]
+                else:
+                    app.logger.warning("'station' column not found in the data")
 
-                   df_result = _wide_table(df, selected_cols)
+                df_result = _wide_table(df, selected_cols)
 
-                   for col in selected_cols:
-                       if col in df_result.columns:
-                           df_result[col] = df_result[col].astype(float)
-                   if 'Latitude' in df_result.columns:
-                       df_result['Latitude'].replace(0, np.nan, inplace=True)
-                   if 'Longitude' in df_result.columns:
-                       df_result['Longitude'].replace(0, np.nan, inplace=True)
+                for col in selected_cols:
+                    if col in df_result.columns:
+                        df_result[col] = df_result[col].astype(float)
+                if 'Latitude' in df_result.columns:
+                    df_result['Latitude'].replace(0, np.nan, inplace=True)
+                if 'Longitude' in df_result.columns:
+                    df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-                   yield df_result
+                yield df_result
 
-               except Exception as e:
-                   app.logger.error(f'Error fetching data chunk: {str(e)}')
-                   raise
+            except Exception as e:
+                app.logger.error(f'Error fetching data chunk: {str(e)}')
+                raise
 
-               current_start_time = current_end_time
+            current_start_time = current_end_time
 
-       return pd.concat(data_generator(), ignore_index=True).drop_duplicates(subset=['date', 'station'])
+    return pd.concat(data_generator(), ignore_index=True).drop_duplicates(subset=['date', 'station'])
 
 # Function to get wide table
 def _wide_table(df, selected_cols):
     try:
+        # Si 'station' no está en las columnas, usamos un valor por defecto
+        if 'station' not in df.columns:
+            df['station'] = 'unknown_station'
+            app.logger.warning("'station' column not found, using 'unknown_station' as default")
+
+        # Agregamos un manejo de duplicados
+        df = df.groupby(['station', 'date', 'metric_name'])['value'].mean().reset_index()
+
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
@@ -253,24 +274,58 @@ def data():
                 'data': grouped_data
             })
         else:
-            # Save JSON data to file
-            json_filename = 'dataresult.json'
-            with open(json_filename, 'w') as json_file:
-                json.dump(grouped_data, json_file, indent=4)
+            # Usar un directorio temporal
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Generar nombres de archivo seguros
+                json_filename = secure_filename('dataresult.json')
+                zip_filename = secure_filename('dataresult.zip')
 
-            # Compress JSON file to ZIP
-            zip_filename = 'dataresult.zip'
-            with zipfile.ZipFile(zip_filename, 'w') as zipf:
-                zipf.write(json_filename, compress_type=zipfile.ZIP_DEFLATED)
+                # Rutas completas para los archivos
+                json_path = os.path.join(temp_dir, json_filename)
+                zip_path = os.path.join(temp_dir, zip_filename)
 
-            # Remove the JSON file after compressing
-            os.remove(json_filename)
+                # Guardar datos JSON en archivo temporal
+                with open(json_path, 'w') as json_file:
+                    json.dump(grouped_data, json_file, indent=4)
 
-            return send_file(zip_filename, as_attachment=True)
+                # Comprimir archivo JSON a ZIP
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    zipf.write(json_path, json_filename, compress_type=zipfile.ZIP_DEFLATED)
 
+                # Eliminar explícitamente el archivo JSON
+                try:
+                    os.remove(json_path)
+                except Exception as e:
+                    app.logger.warning(f"No se pudo eliminar el archivo JSON temporal: {str(e)}")
+
+                # Enviar archivo ZIP
+                return send_file(zip_path, as_attachment=True, download_name=zip_filename)
+
+    except PermissionError as e:
+        app.logger.error(f'Permission error: {str(e)}')
+        return jsonify({'error': 'No se pudo guardar el archivo debido a permisos insuficientes'}), 403
     except Exception as e:
-        app.logger.error(f'Error in data endpoint: {str(e)}')
-        return jsonify({'error': str(e)})
+        app.logger.error(f'Error in data endpoint: {str(e)}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Registrar el error
+    app.logger.error(f'Unhandled exception: {str(e)}', exc_info=True)
+
+    # Preparar un mensaje de error más informativo
+    if isinstance(e, requests.exceptions.RequestException):
+        error_message = "Error al obtener datos de la API externa. Por favor, inténtelo de nuevo más tarde."
+    elif isinstance(e, pd.errors.EmptyDataError):
+        error_message = "No se encontraron datos para procesar. Por favor, verifique los parámetros de su solicitud."
+    elif isinstance(e, PermissionError):
+        error_message = "Error de permisos al intentar guardar el archivo. Por favor, contacte al administrador del sistema."
+    elif isinstance(e, IOError):
+        error_message = "Error al leer o escribir archivos. Por favor, verifique los permisos y el espacio en disco."
+    else:
+        error_message = "Ha ocurrido un error inesperado. Por favor, inténtelo de nuevo o contacte al soporte técnico."
+
+    return jsonify({'error': error_message}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=8081)
