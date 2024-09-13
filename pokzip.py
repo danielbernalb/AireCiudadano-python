@@ -1,5 +1,3 @@
-# pokzip: probando zip, seguir probando
-
 from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
 import pandas as pd
@@ -91,17 +89,28 @@ def _wide_table(df, selected_cols):
             df['station'] = 'unknown_station'
             app.logger.warning("'station' column not found, using 'unknown_station' as default")
 
-        # Agregamos un manejo de duplicados
-        df = df.groupby(['station', 'date', 'metric_name'])['value'].mean().reset_index()
+        # Convertir la columna 'value' a numérico, forzando los errores a NaN
+        df['value'] = pd.to_numeric(df['value'], errors='coerce')
 
+        # Eliminar duplicados en 'station' y 'date'
+        duplicates = df.duplicated(subset=['station', 'date'], keep=False)
+        if duplicates.any():
+            app.logger.warning(f"Found {duplicates.sum()} duplicates in 'station' and 'date' columns. Removing duplicates.")
+            df = df.groupby(['station', 'date', 'metric_name'])['value'].mean().reset_index()
+
+        # Realizar el pivoteo
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
+
+        # Asegurar que todas las columnas seleccionadas estén presentes
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
         for col in missing_cols:
             df_result[col] = np.nan
+
         df_result = df_result[all_cols].reset_index(drop=True)
         df_result.columns.name = ""
         return df_result
+
     except Exception as e:
         app.logger.error(f'Pivot Error: {str(e)}')
         raise
