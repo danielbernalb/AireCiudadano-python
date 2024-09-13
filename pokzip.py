@@ -10,6 +10,7 @@ import time
 import tempfile
 from werkzeug.utils import secure_filename
 import logging
+from io import StringIO
 
 # Constants
 selected_cols = [
@@ -18,6 +19,7 @@ selected_cols = [
 
 # Flask application
 app = Flask(__name__)
+app.logger.setLevel(logging.DEBUG) 
 
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds):
@@ -26,15 +28,17 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
         while current_start_time < end_datetime:
             current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
             query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
-            
+
+            app.logger.debug(f"Fetching data from: {query_url}")
+
             try:
-                response = requests.get(query_url)
+                response = requests.get(query_url, timeout=30)
                 response.raise_for_status()
                 data = response.json()['data']['result']
                 df = pd.json_normalize(data)
 
                 # Log the columns we received
-                app.logger.info(f"Columns received: {df.columns.tolist()}")
+                app.logger.debug(f"Data fetched. Shape: {df.shape}")
 
                 if 'values' in df.columns:
                     df = df.explode('values')
@@ -211,6 +215,8 @@ def data():
     start_datetime_adjusted = start_datetime - datetime.timedelta(hours=1)
     end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
+    app.logger.info(f"Processing request: {start_datetime} to {end_datetime}") 
+
     if aggregation_method == 'average':
         step = '1m'
     else:
@@ -219,12 +225,63 @@ def data():
     url = f"{base_url}/query_range?query={query}"
 
     try:
-        if aggregation_method == 'average':
-            interval_seconds=3539
-            obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step, interval_seconds)
+        # Verificar si el rango de tiempo es superior a 15 días
+        time_range = end_datetime - start_datetime
+        if time_range.days > 15:
+            # Dividir los datos en bloques de 15 días
+            block_size = datetime.timedelta(days=15)
+            current_start = start_datetime
+            data_blocks = []
+
+            while current_start < end_datetime:
+                current_end = min(current_start + block_size, end_datetime)
+                
+                app.logger.info(f"Processing block: {current_start} to {current_end}") 
+
+                if aggregation_method == 'average':
+                    interval_seconds = 3539
+                    block_data = get_data(url, variables, current_start - datetime.timedelta(hours=1), current_end, step, interval_seconds)
+                else:
+                    interval_seconds = 3600
+                    block_data = get_data(url, variables, current_start, current_end, step, interval_seconds)
+                
+                # Procesar el bloque de datos
+                if aggregation_method == 'step':
+                    block_data['date'] = pd.to_datetime(block_data['date'], utc=True)
+                    mask_start = block_data['date'] == pd.to_datetime(current_start, utc=True)
+                    mask_step = (block_data['date'] > pd.to_datetime(current_start, utc=True)) & (block_data['date'] <= pd.to_datetime(current_end, utc=True))
+                    block_data = block_data[mask_start | mask_step]
+                elif aggregation_method == 'average':
+                    block_data['date'] = pd.to_datetime(block_data['date'], utc=True)
+                    block_data.set_index(['station', 'date'], inplace=True)
+                    block_data = block_data.apply(pd.to_numeric, errors='coerce')
+                    hourly_obs = []
+                    for station, group in block_data.groupby('station'):
+                        current_time = current_start
+                        while current_time <= current_end:
+                            mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                            hourly_avg = group.loc[mask].mean()
+                            hourly_avg['station'] = station
+                            hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                            hourly_obs.append(hourly_avg)
+                            current_time += pd.Timedelta(hours=1)
+                    block_data = pd.DataFrame(hourly_obs).reset_index(drop=True)
+                
+                data_blocks.append(block_data)
+                current_start = current_end
+
+            # Concatenar todos los bloques de datos
+            obs = pd.concat(data_blocks, ignore_index=True)
         else:
-            interval_seconds=3600
-            obs = get_data(url, variables, start_datetime, end_datetime, step, interval_seconds)
+            # Procesar los datos normalmente si el rango es menor o igual a 15 días
+            if aggregation_method == 'average':
+                interval_seconds = 3539
+                obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step, interval_seconds)
+            else:
+                interval_seconds = 3600
+                obs = get_data(url, variables, start_datetime, end_datetime, step, interval_seconds)
+
+        app.logger.info(f"Data fetched. Shape: {obs.shape}") 
 
         if station_filter:
             filters = station_filter.split(',')
@@ -262,6 +319,7 @@ def data():
             obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
 
         total_records = obs.shape[0]
+        app.logger.info(f"Total records: {total_records}") 
 
         # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
         json_data = obs.to_dict(orient='records')
@@ -276,7 +334,6 @@ def data():
             if station not in grouped_data:
                 grouped_data[station] = []
             grouped_data[station].append(record)
-
 
         if result_format == "screen":
             return jsonify({
@@ -318,6 +375,9 @@ def data():
                 # Guardar en formato Excel (.xlsx)
                 excel_filename = secure_filename('dataresult.xlsx')
                 excel_path = os.path.join(temp_dir, excel_filename)
+
+                # Convertir la columna 'date' a datetime sin zona horaria
+                obs['date'] = pd.to_datetime(obs['date']).dt.tz_localize(None)
 
                 # Guardar el DataFrame en Excel
                 obs.to_excel(excel_path, index=False)
