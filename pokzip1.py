@@ -11,6 +11,8 @@ import tempfile
 from werkzeug.utils import secure_filename
 import logging
 from io import StringIO
+import shutil
+import pytz
 
 # Constants
 selected_cols = [
@@ -30,7 +32,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
             current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
             query_url = f"{url}&start={current_start_time_adjusted.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
-            app.logger.debug(f"Fetching data from: {query_url}")
+            app.logger.debug(f"Fd: {query_url}")
 
             try:
                 response = requests.get(query_url)
@@ -38,8 +40,6 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
                 data = response.json()['data']['result']
                 df = pd.json_normalize(data)
 
-                # Log the columns we received
-                #app.logger.info(f"Columns received: {df.columns.tolist()}")
                 app.logger.debug(f"Data fetched. Shape: {df.shape}")
 
                 if 'values' in df.columns:
@@ -51,17 +51,14 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
                     df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
                     df['value'] = df['value'].apply(lambda x: x[1])
 
-                # Rename columns, but check if they exist first
                 rename_dict = {
                     "metric.__name__": "metric_name",
                     "metric.exported_job": "station",
                 }
                 df = df.rename(columns={k: v for k, v in rename_dict.items() if k in df.columns})
 
-                # Drop columns containing 'metric.' only if they exist
                 df = df.drop(columns=[col for col in df.columns if 'metric.' in col], errors='ignore')
 
-                # Only filter for non-null 'station' if the column exists
                 if 'station' in df.columns:
                     df = df[df['station'].notnull()]
                 else:
@@ -90,24 +87,19 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
 # Function to get wide table
 def _wide_table(df, selected_cols):
     try:
-        # Si 'station' no está en las columnas, usamos un valor por defecto
         if 'station' not in df.columns:
             df['station'] = 'unknown_station'
             app.logger.warning("'station' column not found, using 'unknown_station' as default")
 
-        # Convertir la columna 'value' a numérico, forzando los errores a NaN
         df['value'] = pd.to_numeric(df['value'], errors='coerce')
 
-        # Eliminar duplicados en 'station' y 'date'
         duplicates = df.duplicated(subset=['station', 'date'], keep=False)
         if duplicates.any():
             app.logger.warning(f"Found {duplicates.sum()} duplicates in 'station' and 'date' columns. Removing duplicates.")
             df = df.groupby(['station', 'date', 'metric_name'])['value'].mean().reset_index()
 
-        # Realizar el pivoteo
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
 
-        # Asegurar que todas las columnas seleccionadas estén presentes
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
         for col in missing_cols:
@@ -181,8 +173,8 @@ def index():
             <label for="result_format">Result format:</label>
             <select id="result_format" name="result_format">
                 <option value="screen">Result in screen</option>
-                <option value="filejson">Result in json ZIP file</option>
-                <option value="filexlsx">Result in xlsx file</option>
+                <option value="filejson">Result in json-zip file</option>
+                <option value="filexlsx">Result in xlsx-zip file</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
@@ -227,115 +219,155 @@ def data():
     url = f"{base_url}/query_range?query={query}"
 
     try:
-        if aggregation_method == 'average':
-            interval_seconds=3600
-            obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step, interval_seconds)
+        # Calcular la diferencia en días
+        date_difference = (end_datetime - start_datetime).days
 
-        else:
-            interval_seconds=3600
-            obs = get_data(url, variables, start_datetime, end_datetime, step, interval_seconds)
-
-        app.logger.info(f"Data fetched. Shape: {obs.shape}") 
-
-        if station_filter:
-            filters = station_filter.split(',')
-            obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
-
-        if aggregation_method == 'step':
-            # Convertir la columna 'date' a tipo datetime
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-
-            # Filtrar para incluir la hora de inicio exacta y evitar duplicados en los intervalos
-            mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
-            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
-            obs = obs[mask_start | mask_step]
-
-        elif aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            obs.set_index(['station', 'date'], inplace=True)
-
-            obs = obs.apply(pd.to_numeric, errors='coerce')
-            hourly_obs = []
-
-            start_time_dt = pd.to_datetime(start_datetime, utc=True)
-            end_time_dt = pd.to_datetime(end_datetime, utc=True)
-
-            for station, group in obs.groupby('station'):
-                current_time = start_time_dt
-                while current_time <= end_time_dt:
-                    mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
-                    hourly_avg = group.loc[mask].mean()
-                    hourly_avg['station'] = station
-                    hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    hourly_obs.append(hourly_avg)
-                    current_time += pd.Timedelta(hours=1)
-
-            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
-
-        total_records = obs.shape[0]
-        app.logger.info(f"Total records: {total_records}")
-
-        # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
-        json_data = obs.to_dict(orient='records')
-        for record in json_data:
-            for key, value in record.items():
-                if pd.isna(value):
-                    record[key] = None
-
-        grouped_data = {}
-        for record in json_data:
-            station = record.pop('station')
-            if station not in grouped_data:
-                grouped_data[station] = []
-            grouped_data[station].append(record)
-
-
-        if result_format == "screen":
-            return jsonify({
-                'total_records': total_records,
-                'data': grouped_data
-            })
-        
-        elif result_format == "filejson":
-            # Usar un directorio temporal
+        if date_difference > 7:
+            # Procesar en bloques de 7 días
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Generar nombres de archivo seguros
-                json_filename = secure_filename('dataresult.json')
-                zip_filename = secure_filename('dataresult.zip')
+                current_start = start_datetime
+                file_paths = []
 
-                # Rutas completas para los archivos
-                json_path = os.path.join(temp_dir, json_filename)
+                while current_start < end_datetime:
+                    current_end = min(current_start + datetime.timedelta(days=7), end_datetime)
+                    
+                    # Obtener datos para el bloque actual
+                    if aggregation_method == 'average':
+                        interval_seconds = 3600
+                        obs = get_data(url, variables, current_start - datetime.timedelta(hours=1), current_end, step, interval_seconds)
+                    else:
+                        interval_seconds = 3600
+                        obs = get_data(url, variables, current_start, current_end, step, interval_seconds)
+
+                    if station_filter:
+                        filters = station_filter.split(',')
+                        obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+
+                    if aggregation_method == 'step':
+                        obs['date'] = pd.to_datetime(obs['date'], utc=True)
+                        mask_start = obs['date'] == pd.to_datetime(current_start, utc=True)
+                        mask_step = (obs['date'] > pd.to_datetime(current_start, utc=True)) & (obs['date'] <= pd.to_datetime(current_end, utc=True))
+                        obs = obs[mask_start | mask_step]
+                    elif aggregation_method == 'average':
+                        obs['date'] = pd.to_datetime(obs['date'], utc=True)
+                        obs.set_index(['station', 'date'], inplace=True)
+                        obs = obs.apply(pd.to_numeric, errors='coerce')
+                        hourly_obs = []
+                        current_time = pd.to_datetime(current_start, utc=True)
+                        while current_time <= current_end:
+                            mask = (obs.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (obs.index.get_level_values('date') <= current_time)
+                            hourly_avg = obs.loc[mask].mean()
+                            hourly_avg['station'] = obs.index.get_level_values('station')[0]
+                            hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                            hourly_obs.append(hourly_avg)
+                            current_time += pd.Timedelta(hours=1)
+                        obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+
+                    # Guardar el bloque en un archivo temporal
+                    if result_format == "filejson":
+                        file_path = os.path.join(temp_dir, f"block_{current_start.strftime('%Y%m%d')}_{current_end.strftime('%Y%m%d')}.json")
+                        obs.to_json(file_path, orient='records')
+                    elif result_format == "filexlsx":
+                        file_path = os.path.join(temp_dir, f"block_{current_start.strftime('%Y%m%d')}_{current_end.strftime('%Y%m%d')}.xlsx")
+                        obs.to_excel(file_path, index=False)
+                    
+                    file_paths.append(file_path)
+                    current_start = current_end + datetime.timedelta(seconds=1)
+
+                # Comprimir todos los archivos en un ZIP
+                zip_filename = 'dataresult.zip'
                 zip_path = os.path.join(temp_dir, zip_filename)
-
-                # Guardar datos JSON en archivo temporal
-                with open(json_path, 'w') as json_file:
-                    json.dump(grouped_data, json_file, indent=4)
-
-                # Comprimir archivo JSON a ZIP
                 with zipfile.ZipFile(zip_path, 'w') as zipf:
-                    zipf.write(json_path, json_filename, compress_type=zipfile.ZIP_DEFLATED)
+                    for file in file_paths:
+                        zipf.write(file, os.path.basename(file))
 
-                # Eliminar explícitamente el archivo JSON
-                try:
-                    os.remove(json_path)
-                except Exception as e:
-                    app.logger.warning(f"No se pudo eliminar el archivo JSON temporal: {str(e)}")
+                # Eliminar archivos temporales
+                for file in file_paths:
+                    os.remove(file)
 
                 # Enviar archivo ZIP
                 return send_file(zip_path, as_attachment=True, download_name=zip_filename)
 
-        elif result_format == "filexlsx":
-            # Usar un directorio temporal
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Guardar en formato Excel (.xlsx)
-                excel_filename = secure_filename('dataresult.xlsx')
-                excel_path = os.path.join(temp_dir, excel_filename)
+        else:
+            # Procesar normalmente para rangos de 7 días o menos
+            if aggregation_method == 'average':
+                interval_seconds=3600
+                obs = get_data(url, variables, start_datetime_adjusted, end_datetime, step, interval_seconds)
+            else:
+                interval_seconds=3600
+                obs = get_data(url, variables, start_datetime, end_datetime, step, interval_seconds)
 
-                # Guardar el DataFrame en Excel
-                obs.to_excel(excel_path, index=False)
+            app.logger.info(f"Data fetched. Shape: {obs.shape}") 
 
-                # Enviar archivo Excel
-                return send_file(excel_path, as_attachment=True, download_name=excel_filename)
+            if station_filter:
+                filters = station_filter.split(',')
+                obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+
+            if aggregation_method == 'step':
+                obs['date'] = pd.to_datetime(obs['date'], utc=True)
+                mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
+                mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
+                obs = obs[mask_start | mask_step]
+            elif aggregation_method == 'average':
+                obs['date'] = pd.to_datetime(obs['date'], utc=True)
+                obs.set_index(['station', 'date'], inplace=True)
+                obs = obs.apply(pd.to_numeric, errors='coerce')
+                hourly_obs = []
+                start_time_dt = pd.to_datetime(start_datetime, utc=True)
+                end_time_dt = pd.to_datetime(end_datetime, utc=True)
+                for station, group in obs.groupby('station'):
+                    current_time = start_time_dt
+                    while current_time <= end_time_dt:
+                        mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
+                        hourly_avg = group.loc[mask].mean()
+                        hourly_avg['station'] = station
+                        hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                        hourly_obs.append(hourly_avg)
+                        current_time += pd.Timedelta(hours=1)
+                obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+
+            total_records = obs.shape[0]
+            app.logger.info(f"Total records: {total_records}")
+
+            if result_format == "screen":
+                json_data = obs.to_dict(orient='records')
+                for record in json_data:
+                    for key, value in record.items():
+                        if pd.isna(value):
+                            record[key] = None
+                grouped_data = {}
+                for record in json_data:
+                    station = record.pop('station')
+                    if station not in grouped_data:
+                        grouped_data[station] = []
+                    grouped_data[station].append(record)
+                return jsonify({
+                    'total_records': total_records,
+                    'data': grouped_data
+                })
+            
+            elif result_format == "filejson":
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    json_filename = secure_filename('dataresult.json')
+                    zip_filename = secure_filename('dataresult.zip')
+                    json_path = os.path.join(temp_dir, json_filename)
+                    zip_path = os.path.join(temp_dir, zip_filename)
+                    with open(json_path, 'w') as json_file:
+                        json.dump(obs.to_dict(orient='records'), json_file, indent=4)
+                    with zipfile.ZipFile(zip_path, 'w') as zipf:
+                        zipf.write(json_path, json_filename, compress_type=zipfile.ZIP_DEFLATED)
+                    try:
+                        os.remove(json_path)
+                    except Exception as e:
+                        app.logger.warning(f"No se pudo eliminar el archivo JSON temporal: {str(e)}")
+                    return send_file(zip_path, as_attachment=True, download_name=zip_filename)
+
+            elif result_format == "filexlsx":
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    excel_filename = secure_filename('dataresult.xlsx')
+                    excel_path = os.path.join(temp_dir, excel_filename)
+                    obs.to_excel(excel_path, index=False)
+                    return send_file(excel_path, as_attachment=True, download_name=excel_filename)
 
     except PermissionError as e:
         app.logger.error(f'Permission error: {str(e)}')
@@ -346,10 +378,8 @@ def data():
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    # Registrar el error
     app.logger.error(f'Unhandled exception: {str(e)}', exc_info=True)
 
-    # Preparar un mensaje de error más informativo
     if isinstance(e, requests.exceptions.RequestException):
         error_message = "Error al obtener datos de la API externa. Por favor, inténtelo de nuevo más tarde."
     elif isinstance(e, pd.errors.EmptyDataError):
