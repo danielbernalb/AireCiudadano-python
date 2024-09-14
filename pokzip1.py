@@ -24,10 +24,11 @@ app.logger.setLevel(logging.DEBUG)
 # Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_seconds):
     def data_generator():
-        current_start_time = start_datetime + datetime.timedelta(seconds=1)
+        current_start_time = start_datetime
         while current_start_time < end_datetime:
+            current_start_time_adjusted = start_datetime + datetime.timedelta(seconds=60)
             current_end_time = min(current_start_time + datetime.timedelta(seconds=interval_seconds), end_datetime)
-            query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+            query_url = f"{url}&start={current_start_time_adjusted.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
             app.logger.debug(f"Fetching data from: {query_url}") 
 
