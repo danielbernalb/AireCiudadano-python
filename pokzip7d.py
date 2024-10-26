@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
+import dask
+import dask.dataframe as dd
 import pandas as pd
 import datetime
 import numpy as np
@@ -11,6 +13,9 @@ import tempfile
 from werkzeug.utils import secure_filename
 import logging
 from io import StringIO
+
+# Deshabilitar PyArrow para evitar el error con `StringDtype`
+dask.config.set({"dataframe.convert-string": False})
 
 # Constants
 selected_cols = [
@@ -35,31 +40,28 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
                 response = requests.get(query_url, timeout=30)
                 response.raise_for_status()
                 data = response.json()['data']['result']
-                df = pd.json_normalize(data)
+                df = dd.from_pandas(pd.json_normalize(data), npartitions=4)
 
-                # Log the columns we received
                 app.logger.debug(f"Data fetched. Shape: {df.shape}")
 
                 if 'values' in df.columns:
-                    df = df.explode('values')
-                    df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                    df['value'] = df['values'].apply(lambda x: x[1])
+                    # Conviértelo temporalmente a Pandas solo para ejecutar explode
+                    df = df.map_partitions(lambda df: df.explode('values'), meta=df)  # Usar `map_partitions` para trabajar con Pandas dentro de Dask
+                    df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat(), meta=('date', str))
+                    df['value'] = df['values'].apply(lambda x: x[1], meta=('value', float))
                     df = df.drop(columns="values")
                 elif 'value' in df.columns:
-                    df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
-                    df['value'] = df['value'].apply(lambda x: x[1])
+                    df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat(), meta=('date', str))
+                    df['value'] = df['value'].apply(lambda x: x[1], meta=('value', float))
 
-                # Rename columns, but check if they exist first
                 rename_dict = {
                     "metric.__name__": "metric_name",
                     "metric.exported_job": "station",
                 }
                 df = df.rename(columns={k: v for k, v in rename_dict.items() if k in df.columns})
 
-                # Drop columns containing 'metric.' only if they exist
                 df = df.drop(columns=[col for col in df.columns if 'metric.' in col], errors='ignore')
 
-                # Only filter for non-null 'station' if the column exists
                 if 'station' in df.columns:
                     df = df[df['station'].notnull()]
                 else:
@@ -75,7 +77,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
                 if 'Longitude' in df_result.columns:
                     df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-                yield df_result
+                yield df_result.compute()
 
             except Exception as e:
                 app.logger.error(f'Error fetching data chunk: {str(e)}')
@@ -83,35 +85,48 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_se
 
             current_start_time = current_end_time
 
-    return pd.concat(data_generator(), ignore_index=True).drop_duplicates(subset=['date', 'station'])
+    return dd.concat([df for df in data_generator()]).drop_duplicates(subset=['date', 'station']).compute()
 
-# Function to get wide table
+# Mover la función fuera de _wide_table
+
+def remove_duplicates_partition(partition):
+    """
+    Elimina duplicados en cada partición por 'station' y 'date'.
+    """
+    duplicates = partition.duplicated(subset=['station', 'date'], keep=False)
+    if duplicates.any():
+        app.logger.warning(f"Found duplicates in 'station' and 'date' columns. Removing duplicates.")
+        partition = partition.groupby(['station', 'date', 'metric_name'])['value'].mean().reset_index()
+    return partition
+
 def _wide_table(df, selected_cols):
     try:
-        # Si 'station' no está en las columnas, usamos un valor por defecto
         if 'station' not in df.columns:
             df['station'] = 'unknown_station'
             app.logger.warning("'station' column not found, using 'unknown_station' as default")
 
-        # Convertir la columna 'value' a numérico, forzando los errores a NaN
-        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+        # Convertimos el tipo de 'value' a numérico
+        df['value'] = dd.to_numeric(df['value'], errors='coerce')
 
-        # Eliminar duplicados en 'station' y 'date'
-        duplicates = df.duplicated(subset=['station', 'date'], keep=False)
-        if duplicates.any():
-            app.logger.warning(f"Found {duplicates.sum()} duplicates in 'station' and 'date' columns. Removing duplicates.")
-            df = df.groupby(['station', 'date', 'metric_name'])['value'].mean().reset_index()
+        # Forzar todas las columnas de texto a `object` antes de cualquier operación crítica
+        for col in df.columns:
+            if pd.api.types.is_string_dtype(df[col]):
+                df[col] = df[col].astype('object')
 
-        # Realizar el pivoteo
-        df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
+        # Eliminar duplicados en cada partición usando la función global
+        df = df.map_partitions(remove_duplicates_partition)
 
-        # Asegurar que todas las columnas seleccionadas estén presentes
+        # Convertir a Pandas temporalmente para usar pivot_table
+        df = df.compute()  # Consolidamos el DataFrame en un solo DataFrame de Pandas
+        df_result = df.pivot_table(index=['station', 'date'], columns='metric_name', values='value').reset_index()
+
         all_cols = ['station', 'date'] + selected_cols
         missing_cols = set(all_cols) - set(df_result.columns)
         for col in missing_cols:
             df_result[col] = np.nan
 
-        df_result = df_result[all_cols].reset_index(drop=True)
+        # Convertir de vuelta a Dask para procesar en paralelo si es necesario
+        df_result = dd.from_pandas(df_result[all_cols], npartitions=4)
         df_result.columns.name = ""
         return df_result
 
@@ -225,53 +240,68 @@ def data():
     url = f"{base_url}/query_range?query={query}"
 
     try:
-        # Verificar si el rango de tiempo es superior a 7 días
         time_range = end_datetime - start_datetime
         if time_range.days > 7:
-            # Dividir los datos en bloques de 7 días
             block_size = datetime.timedelta(days=7)
             current_start = start_datetime
             data_blocks = []
 
             while current_start < end_datetime:
                 current_end = min(current_start + block_size, end_datetime)
-                
+
                 app.logger.info(f"Processing block: {current_start} to {current_end}") 
 
-                if aggregation_method == 'average':
-                    interval_seconds = 3600
-                    block_data = get_data(url, variables, current_start - datetime.timedelta(hours=1), current_end, step, interval_seconds)
-                else:
-                    interval_seconds = 3600
-                    block_data = get_data(url, variables, current_start, current_end, step, interval_seconds)
-                
-                # Procesar el bloque de datos
+                interval_seconds = 3600
+                block_data = get_data(url, variables, current_start, current_end, step, interval_seconds)
+
+
                 if aggregation_method == 'step':
-                    block_data['date'] = pd.to_datetime(block_data['date'], utc=True)
-                    mask_start = block_data['date'] == pd.to_datetime(current_start, utc=True)
-                    mask_step = (block_data['date'] > pd.to_datetime(current_start, utc=True)) & (block_data['date'] <= pd.to_datetime(current_end, utc=True))
+                    # Usamos Dask para convertir la columna 'date' a datetime en paralelo
+                    block_data['date'] = dd.to_datetime(block_data['date'], utc=True)
+                    
+                    # Aplicamos las máscaras en paralelo
+                    mask_start = block_data['date'] == dd.to_datetime(current_start, utc=True)
+                    mask_step = (block_data['date'] > dd.to_datetime(current_start, utc=True)) & (block_data['date'] <= dd.to_datetime(current_end, utc=True))
+                    
+                    # Filtramos los datos usando las máscaras generadas
                     block_data = block_data[mask_start | mask_step]
+
                 elif aggregation_method == 'average':
-                    block_data['date'] = pd.to_datetime(block_data['date'], utc=True)
-                    block_data.set_index(['station', 'date'], inplace=True)
-                    block_data = block_data.apply(pd.to_numeric, errors='coerce')
+                    # Convertimos la columna 'date' a datetime y establecemos un índice compuesto
+                    block_data['date'] = dd.to_datetime(block_data['date'], utc=True)
+                    block_data = block_data.set_index(['station', 'date'])
+
+                    # Aplicamos el método `to_numeric` para convertir valores a numérico de manera segura
+                    block_data = block_data.apply(lambda x: dd.to_numeric(x, errors='coerce'), axis=1)
+
                     hourly_obs = []
-                    for station, group in block_data.groupby('station'):
-                        current_time = current_start
-                        while current_time <= current_end:
-                            mask = (group.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & (group.index.get_level_values('date') <= current_time)
-                            hourly_avg = group.loc[mask].mean()
-                            hourly_avg['station'] = station
-                            hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-                            hourly_obs.append(hourly_avg)
-                            current_time += pd.Timedelta(hours=1)
-                    block_data = pd.DataFrame(hourly_obs).reset_index(drop=True)
-                
+
+                    # Definimos el tiempo de inicio y fin para los promedios horarios
+                    current_time = current_start
+                    while current_time <= current_end:
+                        # Agrupamos por estación y aplicamos máscaras para el rango de tiempo
+                        mask = (block_data.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & \
+                            (block_data.index.get_level_values('date') <= current_time)
+                        
+                        # Calculamos el promedio de cada estación en el rango de tiempo
+                        hourly_avg = block_data.loc[mask].groupby('station').mean().compute()
+                        hourly_avg['station'] = hourly_avg.index
+                        hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                        
+                        # Guardamos el resultado en la lista de observaciones
+                        hourly_obs.append(hourly_avg)
+                        
+                        # Incrementamos el tiempo para la siguiente iteración
+                        current_time += pd.Timedelta(hours=1)
+
+                    # Convertimos la lista de resultados en un DataFrame de Dask
+                    block_data = dd.from_pandas(pd.DataFrame(hourly_obs), npartitions=4)
+
+
                 data_blocks.append(block_data)
                 current_start = current_end
 
-            # Concatenar todos los bloques de datos
-            obs = pd.concat(data_blocks, ignore_index=True)
+            obs = dd.concat(data_blocks, ignore_index=True).compute()
         else:
             # Procesar los datos normalmente si el rango es menor o igual a 15 días
             if aggregation_method == 'average':
@@ -288,21 +318,15 @@ def data():
             obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         if aggregation_method == 'step':
-            # Convertir la columna 'date' a tipo datetime
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-
-            # Filtrar para incluir la hora de inicio exacta y evitar duplicados en los intervalos
+            obs['date'] = dd.to_datetime(obs['date'], utc=True)
             mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
             mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
             obs = obs[mask_start | mask_step]
-
         elif aggregation_method == 'average':
-            obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            obs.set_index(['station', 'date'], inplace=True)
+            obs['date'] = dd.to_datetime(obs['date'], utc=True)
+            obs = obs.set_index(['station', 'date'])
 
-            obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
-
             start_time_dt = pd.to_datetime(start_datetime, utc=True)
             end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
@@ -316,13 +340,12 @@ def data():
                     hourly_obs.append(hourly_avg)
                     current_time += pd.Timedelta(hours=1)
 
-            obs = pd.DataFrame(hourly_obs).reset_index(drop=True)
+            obs = dd.from_pandas(pd.DataFrame(hourly_obs), npartitions=4)
 
-        total_records = obs.shape[0]
+        total_records = obs.shape[0].compute()
         app.logger.info(f"Total records: {total_records}") 
 
-        # Convertir DataFrame a diccionario y reemplazar NaN con None explícitamente
-        json_data = obs.to_dict(orient='records')
+        json_data = obs.compute().to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
                 if pd.isna(value):
@@ -340,74 +363,59 @@ def data():
                 'total_records': total_records,
                 'data': grouped_data
             })
-        
+
         elif result_format == "filejson":
-            # Usar un directorio temporal
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Generar nombres de archivo seguros
                 json_filename = secure_filename('dataresult.json')
                 zip_filename = secure_filename('dataresult.zip')
-
-                # Rutas completas para los archivos
                 json_path = os.path.join(temp_dir, json_filename)
                 zip_path = os.path.join(temp_dir, zip_filename)
 
-                # Guardar datos JSON en archivo temporal
                 with open(json_path, 'w') as json_file:
                     json.dump(grouped_data, json_file, indent=4)
 
-                # Comprimir archivo JSON a ZIP
                 with zipfile.ZipFile(zip_path, 'w') as zipf:
                     zipf.write(json_path, json_filename, compress_type=zipfile.ZIP_DEFLATED)
 
-                # Eliminar explícitamente el archivo JSON
                 try:
                     os.remove(json_path)
                 except Exception as e:
-                    app.logger.warning(f"No se pudo eliminar el archivo JSON temporal: {str(e)}")
+                    app.logger.warning(f"Could not delete temp JSON file: {str(e)}")
 
-                # Enviar archivo ZIP
                 return send_file(zip_path, as_attachment=True, download_name=zip_filename)
 
         elif result_format == "filexlsx":
-            # Usar un directorio temporal
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Guardar en formato Excel (.xlsx)
                 excel_filename = secure_filename('dataresult.xlsx')
                 excel_path = os.path.join(temp_dir, excel_filename)
 
-                # Convertir la columna 'date' a datetime sin zona horaria
-                obs['date'] = pd.to_datetime(obs['date']).dt.tz_localize(None)
+                obs['date'] = dd.to_datetime(obs['date']).dt.tz_localize(None)
 
-                # Guardar el DataFrame en Excel
-                obs.to_excel(excel_path, index=False)
+                obs.compute().to_excel(excel_path, index=False)
 
-                # Enviar archivo Excel
                 return send_file(excel_path, as_attachment=True, download_name=excel_filename)
 
     except PermissionError as e:
         app.logger.error(f'Permission error: {str(e)}')
-        return jsonify({'error': 'No se pudo guardar el archivo debido a permisos insuficientes'}), 403
+        return jsonify({'error': 'Permission denied'}), 403
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}', exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    # Registrar el error
     app.logger.error(f'Unhandled exception: {str(e)}', exc_info=True)
 
-    # Preparar un mensaje de error más informativo
     if isinstance(e, requests.exceptions.RequestException):
-        error_message = "Error al obtener datos de la API externa. Por favor, inténtelo de nuevo más tarde."
-    elif isinstance(e, pd.errors.EmptyDataError):
-        error_message = "No se encontraron datos para procesar. Por favor, verifique los parámetros de su solicitud."
+        error_message = "API data fetch error."
+    elif isinstance(e, dd.errors.EmptyDataError):
+        error_message = "No data found."
     elif isinstance(e, PermissionError):
-        error_message = "Error de permisos al intentar guardar el archivo. Por favor, contacte al administrador del sistema."
+        error_message = "Permission denied."
     elif isinstance(e, IOError):
-        error_message = "Error al leer o escribir archivos. Por favor, verifique los permisos y el espacio en disco."
+        error_message = "File read/write error."
     else:
-        error_message = "Ha ocurrido un error inesperado. Por favor, inténtelo de nuevo o contacte al soporte técnico."
+        error_message = "Unexpected error."
 
     return jsonify({'error': error_message}), 500
 
