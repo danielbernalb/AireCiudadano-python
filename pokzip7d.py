@@ -195,7 +195,7 @@ def index():
             <select id="result_format" name="result_format">
                 <option value="screen">Result in screen</option>
                 <option value="filejson">Result in json ZIP file</option>
-                <option value="filexlsx">Result in xlsx file</option>
+                <option value="filecsv">Result in csv file</option>
             </select><br><br>
             <input type="submit" value="Submit">
         </form>
@@ -365,15 +365,19 @@ def data():
             })
 
         elif result_format == "filejson":
+            # Guardado en JSON comprimido en ZIP
             with tempfile.TemporaryDirectory() as temp_dir:
                 json_filename = secure_filename('dataresult.json')
                 zip_filename = secure_filename('dataresult.zip')
+
                 json_path = os.path.join(temp_dir, json_filename)
                 zip_path = os.path.join(temp_dir, zip_filename)
 
+                # Guardar datos JSON en archivo temporal
                 with open(json_path, 'w') as json_file:
                     json.dump(grouped_data, json_file, indent=4)
 
+                # Comprimir archivo JSON a ZIP
                 with zipfile.ZipFile(zip_path, 'w') as zipf:
                     zipf.write(json_path, json_filename, compress_type=zipfile.ZIP_DEFLATED)
 
@@ -382,18 +386,32 @@ def data():
                 except Exception as e:
                     app.logger.warning(f"Could not delete temp JSON file: {str(e)}")
 
+                # Enviar archivo ZIP
                 return send_file(zip_path, as_attachment=True, download_name=zip_filename)
 
-        elif result_format == "filexlsx":
+        elif result_format == "filecsv":
+            # Guardado en CSV comprimido en ZIP
             with tempfile.TemporaryDirectory() as temp_dir:
-                excel_filename = secure_filename('dataresult.xlsx')
-                excel_path = os.path.join(temp_dir, excel_filename)
+                csv_filename = secure_filename('dataresult.csv')
+                zip_filename = secure_filename('dataresult.zip')
 
-                obs['date'] = dd.to_datetime(obs['date']).dt.tz_localize(None)
+                csv_path = os.path.join(temp_dir, csv_filename)
+                zip_path = os.path.join(temp_dir, zip_filename)
 
-                obs.compute().to_excel(excel_path, index=False)
+                # Convertir a CSV
+                obs.compute().to_csv(csv_path, index=False)
 
-                return send_file(excel_path, as_attachment=True, download_name=excel_filename)
+                # Comprimir archivo CSV a ZIP
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    zipf.write(csv_path, csv_filename, compress_type=zipfile.ZIP_DEFLATED)
+
+                try:
+                    os.remove(csv_path)
+                except Exception as e:
+                    app.logger.warning(f"Could not delete temp CSV file: {str(e)}")
+
+                # Enviar archivo ZIP
+                return send_file(zip_path, as_attachment=True, download_name=zip_filename)
 
     except PermissionError as e:
         app.logger.error(f'Permission error: {str(e)}')
@@ -404,18 +422,20 @@ def data():
 
 @app.errorhandler(Exception)
 def handle_exception(e):
+    # Registrar el error
     app.logger.error(f'Unhandled exception: {str(e)}', exc_info=True)
 
+    # Preparar un mensaje de error más informativo
     if isinstance(e, requests.exceptions.RequestException):
-        error_message = "API data fetch error."
-    elif isinstance(e, dd.errors.EmptyDataError):
-        error_message = "No data found."
+        error_message = "Error al obtener datos de la API externa. Por favor, inténtelo de nuevo más tarde."
+    elif isinstance(e, pd.errors.EmptyDataError):  # Manejo específico para errores de Pandas
+        error_message = "No se encontraron datos para procesar. Por favor, verifique los parámetros de su solicitud."
     elif isinstance(e, PermissionError):
-        error_message = "Permission denied."
+        error_message = "Error de permisos al intentar guardar el archivo. Por favor, contacte al administrador del sistema."
     elif isinstance(e, IOError):
-        error_message = "File read/write error."
+        error_message = "Error al leer o escribir archivos. Por favor, verifique los permisos y el espacio en disco."
     else:
-        error_message = "Unexpected error."
+        error_message = "Ha ocurrido un error inesperado. Por favor, inténtelo de nuevo o contacte al soporte técnico."
 
     return jsonify({'error': error_message}), 500
 
