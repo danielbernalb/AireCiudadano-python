@@ -6,18 +6,17 @@ import pandas as pd
 import datetime
 import numpy as np
 import json
-import dask.dataframe as dd  # Optional: for Dask integration
-
+import dask.dataframe as dd  # Importar Dask para procesamiento en paralelo
 
 # Constants
 selected_cols = [
     "PM25", "PM25raw", "PM1", "Humidity", "Temperature",
 ]
 
-# Flask application
+# Aplicación Flask
 app = Flask(__name__)
 
-# Get data from API
+# Función para obtener datos de la API
 def get_data(url, selected_cols):
     try:
         data = requests.get(url).json()['data']['result']
@@ -44,7 +43,7 @@ def get_data(url, selected_cols):
 
         for col in selected_cols:
             if col in df_result.columns:
-                df_result[col] = df_result[col].astype(float)
+                df_result[col] = df_result[col].astype('float32')  # Optimización de tipo de datos
         if 'Latitude' in df_result.columns:
             df_result['Latitude'].replace(0, np.nan, inplace=True)
         if 'Longitude' in df_result.columns:
@@ -55,7 +54,7 @@ def get_data(url, selected_cols):
         app.logger.error(f'Error in get_data: {str(e)}')
         raise
 
-# Function to get wide table
+# Función para obtener tabla en formato ancho
 def _wide_table(df, selected_cols):
     try:
         df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
@@ -65,15 +64,25 @@ def _wide_table(df, selected_cols):
             df_result[col] = np.nan
         df_result = df_result[all_cols].reset_index(drop=True)
         df_result.columns.name = ""
+        df_result['station'] = df_result['station'].astype('category')  # Optimización de tipo de datos
         return df_result
     except Exception as e:
         app.logger.error(f'Pivot Error: {str(e)}')
         raise
 
-# Constructor of the step value for time range queries
+# Constructor del valor de paso para consultas de rango de tiempo
 def _get_step(number, choice):
     options = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w", "years": "y"}
     return f"{number}{options[choice]}"
+
+# Función para remuestreo por hora usando Pandas dentro de Dask
+def resample_hourly(df):
+    df = df.set_index('date')
+    df = df.resample('1h').mean()
+    for col in selected_cols:  # Asegurar que todas las columnas existan
+        if col not in df.columns:
+            df[col] = np.nan 
+    return df.reset_index()
 
 @app.route('/getdata')
 def index():
@@ -154,13 +163,12 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    # Keep start time unchanged
     start_datetime = f"{start_date}T{start_time}:00Z"
     start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
     end_datetime = f"{end_date}T{end_time}:00Z"
 
     if aggregation_method == 'average':
-        step = '1m'  # Consider increasing to '5m' or '10m' if suitable
+        step = '1m'
         url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
     else:
         step = _get_step(step_number, step_option)
@@ -174,38 +182,27 @@ def data():
 
         if aggregation_method == 'step':
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            obs = obs.set_index('date')
-            obs = obs.groupby('station').resample(step).mean().reset_index()
-            obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            mask_start = obs['date'] == pd.to_datetime(start_datetime, utc=True)
+            mask_step = (obs['date'] > pd.to_datetime(start_datetime, utc=True)) & (obs['date'] <= pd.to_datetime(end_datetime, utc=True))
+            obs = obs[mask_start | mask_step]
+
         elif aggregation_method == 'average':
-            # Optimized aggregation using groupby and resample
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
-            obs.set_index('date', inplace=True)
-            
-            # Optional: Convert to Dask DataFrame for large datasets
-            # ddf = dd.from_pandas(obs, npartitions=4)
-            # hourly_obs = ddf.groupby('station').resample('1H').mean().compute()
-            
-            # Using Pandas for simplicity
-            hourly_obs = obs.groupby('station').resample('1H').mean().reset_index()
+            ddf = dd.from_pandas(obs, npartitions=4)  # Ajusta particiones según tus cores de CPU
+
+# Agrupación y remuestreo eficiente usando map_partitions en Dask
+            meta = {'date': 'datetime64[ns, UTC]', 'station': 'category', **{col: 'float32' for col in selected_cols}} 
+            hourly_obs = ddf.groupby('station').apply(lambda df: resample_hourly(df), meta=meta).compute()
+            hourly_obs = hourly_obs.reset_index()
             hourly_obs['date'] = hourly_obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            
             obs = hourly_obs
 
-        # Filter to ensure dates are within range
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
 
+        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
         total_records = obs.shape[0]
 
-        # Optimize data types
-        for col in selected_cols:
-            if col in obs.columns:
-                obs[col] = obs[col].astype('float32')
-        if 'Latitude' in obs.columns:
-            obs['Latitude'].replace(0, np.nan, inplace=True)
-        if 'Longitude' in obs.columns:
-            obs['Longitude'].replace(0, np.nan, inplace=True)
-
-        # Convert DataFrame to dictionary and handle NaN
+        # Convertir DataFrame a diccionario
         json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():

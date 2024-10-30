@@ -44,7 +44,7 @@ def get_data(url, selected_cols):
 
         for col in selected_cols:
             if col in df_result.columns:
-                df_result[col] = df_result[col].astype(float)
+                df_result[col] = df_result[col].astype('float32')  # Use float32 instead of float64
         if 'Latitude' in df_result.columns:
             df_result['Latitude'].replace(0, np.nan, inplace=True)
         if 'Longitude' in df_result.columns:
