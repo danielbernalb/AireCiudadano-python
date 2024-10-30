@@ -1,9 +1,10 @@
 from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
 import dask
-import dask.dataframe as dd
-import pandas as pd
 import datetime
+from datetime import timedelta  # Importación directa de datetime y timedelta
+import pandas as pd
+import dask.dataframe as dd
 import numpy as np
 import json
 import os
@@ -242,65 +243,65 @@ def data():
     try:
         time_range = end_datetime - start_datetime
         if time_range.days > 7:
-            block_size = datetime.timedelta(days=7)
+            block_size = timedelta(days=7)  # Usar `timedelta` directamente
             current_start = start_datetime
             data_blocks = []
 
             while current_start < end_datetime:
                 current_end = min(current_start + block_size, end_datetime)
 
-                app.logger.info(f"Processing block: {current_start} to {current_end}") 
+                app.logger.info(f"Processing block: {current_start} to {current_end}")
 
                 interval_seconds = 3600
                 block_data = get_data(url, variables, current_start, current_end, step, interval_seconds)
 
-
                 if aggregation_method == 'step':
-                    # Usamos Dask para convertir la columna 'date' a datetime en paralelo
+                    # Convertir la columna 'date' a datetime en paralelo
                     block_data['date'] = dd.to_datetime(block_data['date'], utc=True)
                     
-                    # Aplicamos las máscaras en paralelo
-                    mask_start = block_data['date'] == dd.to_datetime(current_start, utc=True)
-                    mask_step = (block_data['date'] > dd.to_datetime(current_start, utc=True)) & (block_data['date'] <= dd.to_datetime(current_end, utc=True))
+                    # Aplicar las máscaras en paralelo
+                    mask_start = block_data['date'] == pd.to_datetime(current_start, utc=True)
+                    mask_step = (block_data['date'] > pd.to_datetime(current_start, utc=True)) & (block_data['date'] <= pd.to_datetime(current_end, utc=True))
                     
-                    # Filtramos los datos usando las máscaras generadas
+                    # Filtrar los datos usando las máscaras generadas
                     block_data = block_data[mask_start | mask_step]
 
                 elif aggregation_method == 'average':
-                    # Convertimos la columna 'date' a datetime y establecemos un índice compuesto
+                    # Convertir la columna 'date' a datetime y establecer un índice compuesto
                     block_data['date'] = dd.to_datetime(block_data['date'], utc=True)
                     block_data = block_data.set_index(['station', 'date'])
 
-                    # Aplicamos el método `to_numeric` para convertir valores a numérico de manera segura
-                    block_data = block_data.apply(lambda x: dd.to_numeric(x, errors='coerce'), axis=1)
+                    # Convertir valores a numérico en cada partición usando `map_partitions`
+                    block_data = block_data.map_partitions(lambda df: df.apply(pd.to_numeric, errors='coerce'))
 
                     hourly_obs = []
 
-                    # Definimos el tiempo de inicio y fin para los promedios horarios
+                    # Definir el tiempo de inicio y fin para los promedios horarios
                     current_time = current_start
                     while current_time <= current_end:
-                        # Agrupamos por estación y aplicamos máscaras para el rango de tiempo
-                        mask = (block_data.index.get_level_values('date') > current_time - pd.Timedelta(hours=1)) & \
+                        # Aplicar máscaras para el rango de tiempo
+                        mask = (block_data.index.get_level_values('date') > current_time - timedelta(hours=1)) & \
                             (block_data.index.get_level_values('date') <= current_time)
                         
-                        # Calculamos el promedio de cada estación en el rango de tiempo
+                        # Calcular el promedio de cada estación en el rango de tiempo
                         hourly_avg = block_data.loc[mask].groupby('station').mean().compute()
                         hourly_avg['station'] = hourly_avg.index
                         hourly_avg['date'] = current_time.strftime('%Y-%m-%dT%H:%M:%SZ')
                         
-                        # Guardamos el resultado en la lista de observaciones
+                        # Guardar el resultado en la lista de observaciones
                         hourly_obs.append(hourly_avg)
                         
-                        # Incrementamos el tiempo para la siguiente iteración
-                        current_time += pd.Timedelta(hours=1)
+                        # Incrementar el tiempo para la siguiente iteración
+                        current_time += timedelta(hours=1)
 
-                    # Convertimos la lista de resultados en un DataFrame de Dask
+                    # Convertir la lista de resultados en un DataFrame de Dask
                     block_data = dd.from_pandas(pd.DataFrame(hourly_obs), npartitions=4)
 
-
+                # Agregar el bloque de datos procesado a la lista de bloques
                 data_blocks.append(block_data)
                 current_start = current_end
 
+            # Concatenar todos los bloques de datos en un solo DataFrame de Dask
             obs = dd.concat(data_blocks, ignore_index=True).compute()
         else:
             # Procesar los datos normalmente si el rango es menor o igual a 15 días
@@ -342,10 +343,22 @@ def data():
 
             obs = dd.from_pandas(pd.DataFrame(hourly_obs), npartitions=4)
 
-        total_records = obs.shape[0].compute()
-        app.logger.info(f"Total records: {total_records}") 
+        if isinstance(obs, dd.DataFrame):
+            obs = obs.compute()  # Consolidar el Dask DataFrame a Pandas
 
-        json_data = obs.compute().to_dict(orient='records')
+        # Ordenar el DataFrame por las columnas 'station' y 'date' para mantener el orden cronológico
+        obs = obs.sort_values(by=['station', 'date']).reset_index(drop=True)
+
+        total_records = obs.shape[0]
+
+        app.logger.info(f"Total records: {total_records}")
+
+        # Convertir columnas de tipo datetime a cadena de texto en formato ISO para serialización JSON
+        if 'date' in obs.columns:
+            obs['date'] = obs['date'].astype(str)
+
+        # Convertir el DataFrame a diccionario para JSON
+        json_data = obs.to_dict(orient='records')
         for record in json_data:
             for key, value in record.items():
                 if pd.isna(value):
@@ -365,7 +378,7 @@ def data():
             })
 
         elif result_format == "filejson":
-            # Guardado en JSON comprimido en ZIP
+
             with tempfile.TemporaryDirectory() as temp_dir:
                 json_filename = secure_filename('dataresult.json')
                 zip_filename = secure_filename('dataresult.zip')
@@ -390,7 +403,7 @@ def data():
                 return send_file(zip_path, as_attachment=True, download_name=zip_filename)
 
         elif result_format == "filecsv":
-            # Guardado en CSV comprimido en ZIP
+
             with tempfile.TemporaryDirectory() as temp_dir:
                 csv_filename = secure_filename('dataresult.csv')
                 zip_filename = secure_filename('dataresult.zip')
@@ -399,7 +412,7 @@ def data():
                 zip_path = os.path.join(temp_dir, zip_filename)
 
                 # Convertir a CSV
-                obs.compute().to_csv(csv_path, index=False)
+                obs.to_csv(csv_path, index=False)  # Ya es Pandas, así que no necesita `compute()`
 
                 # Comprimir archivo CSV a ZIP
                 with zipfile.ZipFile(zip_path, 'w') as zipf:
