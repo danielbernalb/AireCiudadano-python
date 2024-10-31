@@ -77,11 +77,19 @@ def _get_step(number, choice):
 
 # Función para remuestreo por hora usando Pandas dentro de Dask
 def resample_hourly(df):
+    if df.empty:  # Verificar si el DataFrame está vacío
+        return pd.DataFrame(columns=['date', 'station'] + selected_cols)  # Devuelve un DataFrame vacío con las columnas necesarias
+    
+    if 'station' not in df.columns:
+        raise ValueError("La columna 'station' no está presente en el DataFrame.")  # Añadir mensaje claro para 'station'
+
+    station = df['station'].iloc[0]  # Guardar la estación para reutilizar
     df = df.set_index('date')
     df = df.resample('1h').mean()
+    df['station'] = station  # Volver a asignar la estación después de remuestreo
     for col in selected_cols:  # Asegurar que todas las columnas existan
         if col not in df.columns:
-            df[col] = np.nan 
+            df[col] = np.nan
     return df.reset_index()
 
 @app.route('/getdata')
@@ -151,7 +159,7 @@ def index():
 @app.route('/dataresult', methods=['POST'])
 def data():
     variables = request.form.getlist('variables')
-    base_url = "http://194.242.56.226:30000/api/v1"
+    base_url = "http://sensor.aireciudadano.com:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
     start_date = request.form['start_date']
@@ -189,11 +197,11 @@ def data():
         elif aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             ddf = dd.from_pandas(obs, npartitions=4)  # Ajusta particiones según tus cores de CPU
-
-# Agrupación y remuestreo eficiente usando map_partitions en Dask
-            meta = {'date': 'datetime64[ns, UTC]', 'station': 'category', **{col: 'float32' for col in selected_cols}} 
-            hourly_obs = ddf.groupby('station').apply(lambda df: resample_hourly(df), meta=meta).compute()
-            hourly_obs = hourly_obs.reset_index()
+            
+            # Agrupación y remuestreo usando map_partitions en Dask
+            meta = {'date': 'datetime64[ns, UTC]', 'station': 'category', **{col: 'float32' for col in selected_cols}}
+            hourly_obs = ddf.groupby('station', observed=False).apply(lambda df: resample_hourly(df), meta=meta).compute()
+            hourly_obs = hourly_obs.reset_index(drop=True)
             hourly_obs['date'] = hourly_obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
             
             obs = hourly_obs

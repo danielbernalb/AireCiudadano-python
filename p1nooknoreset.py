@@ -25,13 +25,21 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+        
+        app.logger.debug(f"Querying data from {current_start_time} to {current_end_time}")
 
         try:
             response = requests.get(query_url)
             response.raise_for_status()
-            data = response.json()['data']['result']
-            df = pd.json_normalize(data)
+            data = response.json().get('data', {}).get('result', [])
+            if not data:
+                app.logger.warning("No data returned from API in this interval.")
+                continue
 
+            df = pd.json_normalize(data)
+            app.logger.debug(f"Dataframe shape after json_normalize: {df.shape}")
+
+            # Explode values and check for presence of station column
             if 'values' in df.columns:
                 df = df.explode('values')
                 df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
@@ -41,12 +49,15 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
                 df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
                 df['value'] = df['value'].apply(lambda x: x[1])
 
-            df = df.rename(columns={
-                "metric.__name__": "metric_name",
-                "metric.exported_job": "station",
-            })
+            # Rename and validate presence of 'station' column
+            df = df.rename(columns={"metric.__name__": "metric_name", "metric.exported_job": "station"})
+            app.logger.debug(f"Columns in dataframe after renaming: {df.columns}")
 
-            df = df.drop(columns=[col for col in df.columns if "metric." in col]).reset_index(drop=True)
+            # Check if 'station' column exists after renaming
+            if 'station' not in df.columns:
+                app.logger.error("Missing 'station' column after renaming.")
+                continue
+
             df = df[df['station'].notnull()]
 
             df_result = _wide_table(df, selected_cols)
@@ -59,6 +70,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             if 'Longitude' in df_result.columns:
                 df_result['Longitude'].replace(0, np.nan, inplace=True)
 
+            app.logger.debug(f"Dataframe shape after processing and cleaning: {df_result.shape}")
             all_results.append(df_result)
 
         except Exception as e:
@@ -67,10 +79,8 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
 
         current_start_time = current_end_time
 
-        # Pausa para evitar sobrecarga del servidor
-#        time.sleep(1)
-
-    final_df = pd.concat(all_results, ignore_index=True)
+    final_df = pd.concat(all_results, ignore_index=True) if all_results else pd.DataFrame(columns=selected_cols)
+    app.logger.debug(f"Final dataframe shape after concatenation: {final_df.shape}")
     return final_df
 
 # Function to get wide table
@@ -159,12 +169,14 @@ def index():
 
 @app.route('/dataresult', methods=['POST'])
 def data():
+    start_time = time.time()  # Start timer
+
     variables = request.form.getlist('variables')
     base_url = "http://194.242.56.226:30000/api/v1"
     query = '{job%3D"pushgateway"}'
 
     start_date = request.form['start_date']
-    start_time = request.form['start_time']
+    start_time_str = request.form['start_time']
     end_date = request.form['end_date']
     end_time = request.form['end_time']
     step_number = request.form['step_number']
@@ -172,7 +184,7 @@ def data():
     aggregation_method = request.form['aggregation_method']
     station_filter = request.form.get('station_filter', '')
 
-    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time}")
+    start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
     end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
 
     if aggregation_method == 'average':
@@ -190,10 +202,8 @@ def data():
         if aggregation_method == 'average':
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
-
             obs = obs.apply(pd.to_numeric, errors='coerce')
             hourly_obs = []
-
             start_time_dt = pd.to_datetime(start_datetime, utc=True)
             end_time_dt = pd.to_datetime(end_datetime, utc=True)
 
@@ -225,13 +235,20 @@ def data():
                 grouped_data[station] = []
             grouped_data[station].append(record)
 
+        # Calculate process duration
+        process_duration = time.time() - start_time
+        hours, remainder = divmod(int(process_duration), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
+
         return jsonify({
             'total_records': total_records,
-            'data': grouped_data
+            'data': grouped_data,
+            'process_duration': formatted_duration
         })
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}')
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=8081)
