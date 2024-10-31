@@ -1,0 +1,347 @@
+# p1claude5: Seguimos en pruebas
+
+from flask import Flask, request, jsonify, render_template_string, send_file, Response
+import requests
+import pandas as pd
+import datetime
+import numpy as np
+import time
+import io
+import zipfile
+import json
+import logging
+
+# Constants
+selected_cols = [
+    "PM25", "PM25raw", "PM1", "Humidity", "Temperature",
+]
+
+# Flask application
+app = Flask(__name__)
+app.logger.setLevel(logging.DEBUG) 
+
+def create_zip_file(data, file_format='json'):
+    memory_file = io.BytesIO()
+    
+    try:
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            if file_format == 'json':
+                # Convert data to JSON string
+                data_str = json.dumps(data, indent=2)
+                zf.writestr('data.json', data_str)
+            else:  # csv
+                # Convert nested dict to flat dataframe
+                rows = []
+                for station, records in data['data'].items():
+                    for record in records:
+                        record['station'] = station
+                        rows.append(record)
+                df = pd.DataFrame(rows)
+                
+                # Convert to CSV string
+                csv_buffer = io.StringIO()
+                df.to_csv(csv_buffer, index=False)
+                zf.writestr('data.csv', csv_buffer.getvalue())
+        
+        # Important: seek to beginning of file
+        memory_file.seek(0)
+        return memory_file
+    
+    except Exception as e:
+        app.logger.error(f'Error creating zip file: {str(e)}')
+        raise
+
+def process_data_in_chunks(url, variables, start_datetime, end_datetime):
+    chunk_size = datetime.timedelta(days=7)
+    current_start = start_datetime
+    all_data = []
+
+    while current_start < end_datetime:
+        current_end = min(current_start + chunk_size, end_datetime)
+        # Usar step de 1 minuto
+        chunk_data = get_data(url, variables, current_start, current_end, '1m', interval_minutes=60)
+
+        # Aplicar promedio horario al chunk
+        chunk_data['date'] = pd.to_datetime(chunk_data['date'], utc=True)
+        chunk_data.set_index(['station', 'date'], inplace=True)
+        chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
+
+        hourly_chunks = []
+        for station, group in chunk_data.groupby('station'):
+            # Resamplear a intervalos horarios y calcular promedio
+            hourly_data = group.resample('1h', level='date').mean()
+            hourly_data['station'] = station
+            hourly_chunks.append(hourly_data.reset_index())
+
+        chunk_data = pd.concat(hourly_chunks, ignore_index=True)
+        all_data.append(chunk_data)
+
+        current_start = current_end
+
+        # Yield progress information
+        progress = {
+            'current_date': current_end.isoformat(),
+            'progress_percentage': min(100, (current_end - start_datetime) / (end_datetime - start_datetime) * 100)
+        }
+        yield progress, chunk_data
+
+    return all_data
+
+# Get data from API with time intervals
+def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
+    all_results = []
+    current_start_time = start_datetime
+
+    while current_start_time < end_datetime:
+        current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
+        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+
+        app.logger.debug(f"Querying data from {current_start_time} to {current_end_time}")
+        app.logger.debug(f"url: {query_url}")
+
+        try:
+            response = requests.get(query_url)
+            response.raise_for_status()
+            data = response.json().get('data', {}).get('result', [])
+            if not data:
+                app.logger.warning("No data returned from API in this interval.")
+                continue
+
+            df = pd.json_normalize(data)
+            app.logger.debug(f"Dataframe shape after json_normalize: {df.shape}")
+
+            # Explode values and check for presence of station column
+            if 'values' in df.columns:
+                df = df.explode('values')
+                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                df['value'] = df['values'].apply(lambda x: x[1])
+                df = df.drop(columns="values")
+            elif 'value' in df.columns:
+                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                df['value'] = df['value'].apply(lambda x: x[1])
+
+            # Rename and validate presence of 'station' column
+            df = df.rename(columns={"metric.__name__": "metric_name", "metric.exported_job": "station"})
+            app.logger.debug(f"Columns in dataframe after renaming: {df.columns}")
+
+            # Check if 'station' column exists after renaming
+            if 'station' not in df.columns:
+                app.logger.error("Missing 'station' column after renaming.")
+                continue
+
+            df = df[df['station'].notnull()]
+
+            df_result = _wide_table(df, selected_cols)
+
+            for col in selected_cols:
+                if col in df_result.columns:
+                    df_result[col] = df_result[col].astype(float)
+            if 'Latitude' in df_result.columns:
+                df_result['Latitude'].replace(0, np.nan, inplace=True)
+            if 'Longitude' in df_result.columns:
+                df_result['Longitude'].replace(0, np.nan, inplace=True)
+
+            app.logger.debug(f"Dataframe shape after processing and cleaning: {df_result.shape}")
+            all_results.append(df_result)
+
+        except Exception as e:
+            app.logger.error(f'Error fetching data chunk: {str(e)}')
+            raise
+
+        current_start_time = current_end_time
+
+    final_df = pd.concat(all_results, ignore_index=True) if all_results else pd.DataFrame(columns=selected_cols)
+    app.logger.debug(f"Final dataframe shape after concatenation: {final_df.shape}")
+    return final_df
+
+# Function to get wide table
+def _wide_table(df, selected_cols):
+    try:
+        df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
+        all_cols = ['station', 'date'] + selected_cols
+        missing_cols = set(all_cols) - set(df_result.columns)
+        for col in missing_cols:
+            df_result[col] = np.nan
+        df_result = df_result[all_cols].reset_index(drop=True)
+        df_result.columns.name = ""
+        return df_result
+    except Exception as e:
+        app.logger.error(f'Pivot Error: {str(e)}')
+        raise
+
+
+@app.route('/getdata')
+def index():
+    variables = request.args.getlist('variables') or selected_cols
+    start_date = request.args.get('start_date', '2024-05-09')
+    start_time = request.args.get('start_time', '08:00')
+    end_date = request.args.get('end_date', '2024-05-09')
+    end_time = request.args.get('end_time', '10:00')
+    station_filter = request.args.get('station_filter', '')
+
+    return render_template_string('''
+        <form action="/dataresult" method="post">
+            <label for="variables">Select variables union_claude5:</label><br>
+            <input type="checkbox" id="select_all" onclick="toggle(this);">
+            <label for="select_all">Select/Deselect All</label><br>
+            {% for col in selected_cols %}
+                <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
+                <label for="{{ col }}">{{ col }}</label><br>
+            {% endfor %}
+            <br>
+            <label for="start_date">Start date/time:</label>
+            <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+            <label for="start_time"> / </label>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="3600" list="hour-markers"><br><br>
+            <label for="end_date">End date/time:</label>
+            <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
+            <label for="end_time"> / </label>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="3600" list="hour-markers"><br><br>
+            <datalist id="hour-markers">
+                {% for hour in range(24) %}
+                    <option value="{{ '%02d:00'|format(hour) }}"></option>
+                {% endfor %}
+            </datalist>
+            <label for="station_filter">Station Filter:</label>
+            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
+
+            <label for="result_format">Result format:</label>
+            <select id="result_format" name="result_format">
+                <option value="screen">Result in screen</option>
+                <option value="filejson">Result in json ZIP file</option>
+                <option value="filecsv">Result in csv ZIP file</option>
+            </select><br><br>
+
+            <input type="submit" value="Submit">
+        </form>
+        <script>
+            function toggle(source) {
+                checkboxes = document.getElementsByName('variables');
+                for (var i = 0; i < checkboxes.length; i++) {
+                    checkboxes[i].checked = source.checked;
+                }
+            }
+        </script>
+    ''', selected_cols=selected_cols, variables=variables, start_date=start_date, 
+       start_time=start_time, end_date=end_date, end_time=end_time)
+
+@app.route('/dataresult', methods=['POST'])
+def data():
+    start_time = time.time()
+
+    try:
+        variables = request.form.getlist('variables')
+        base_url = "http://sensor.aireciudadano.com:30000/api/v1"
+        query = '{job%3D"pushgateway"}'
+
+        start_date = request.form['start_date']
+        start_time_str = request.form['start_time']
+        end_date = request.form['end_date']
+        end_time = request.form['end_time']
+        station_filter = request.form.get('station_filter', '')
+        result_format = request.form.get('result_format', 'screen')
+
+        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
+        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+        
+        date_diff = end_datetime - start_datetime
+        
+        if date_diff.days > 7 and result_format == 'screen':
+            return jsonify({
+                'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
+            })
+
+        # Process data
+        if date_diff.days > 7:
+            all_data = []
+            for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", 
+                                                             variables, start_datetime, end_datetime):
+                if station_filter:
+                    filters = station_filter.split(',')
+                    chunk_data = chunk_data[chunk_data['station'].str.contains('|'.join(filters), case=False)]
+                all_data.append(chunk_data)
+            obs = pd.concat(all_data, ignore_index=True)
+        else:
+            # Obtener datos y redondear a 3 decimales todas las columnas numéricas
+            obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m')
+            obs = obs.round(3)
+            
+            # Apply hourly average
+            obs['date'] = pd.to_datetime(obs['date'], utc=True)
+            obs.set_index(['station', 'date'], inplace=True)
+            obs = obs.apply(pd.to_numeric, errors='coerce')
+            
+            hourly_obs = []
+            for station, group in obs.groupby('station'):
+                hourly_data = group.resample('1h', level='date').mean()
+                hourly_data['station'] = station
+                hourly_obs.append(hourly_data.reset_index())
+            
+            obs = pd.concat(hourly_obs, ignore_index=True)
+            
+            if station_filter:
+                filters = station_filter.split(',')
+                obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+
+        # Redondear a 3 decimales antes de guardar en JSON o CSV
+        obs = obs.round(3)
+
+        total_records = obs.shape[0]
+        obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        json_data = obs.to_dict(orient='records')
+        
+        # Clean up NaN values
+        for record in json_data:
+            for key, value in record.items():
+                if pd.isna(value):
+                    record[key] = None
+
+        # Group by station
+        grouped_data = {}
+        for record in json_data:
+            station = record.pop('station')
+            if station not in grouped_data:
+                grouped_data[station] = []
+            grouped_data[station].append(record)
+
+        process_duration = time.time() - start_time
+        hours, remainder = divmod(int(process_duration), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
+
+        result_data = {
+            'total_records': total_records,
+            'data': grouped_data,
+            'process_duration': formatted_duration
+        }
+
+        if result_format == 'screen':
+            app.logger.debug(f"Data resultin screen")
+            return jsonify(result_data)
+        else:
+            # Crear y enviar archivo
+            try:
+                memory_file = create_zip_file(result_data, 'json' if result_format == 'filejson' else 'csv')
+                
+                timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
+                app.logger.debug(f"Data result in file")                
+                return Response(
+                    memory_file.getvalue(),
+                    mimetype='application/zip',
+                    headers={
+                        'Content-Disposition': f'attachment; filename={filename}',
+                        'Content-Type': 'application/zip'
+                    }
+                )
+            
+            except Exception as e:
+                app.logger.error(f'Error creating download file: {str(e)}')
+                return jsonify({'error': f'Error creating download file: {str(e)}'})
+
+    except Exception as e:
+        app.logger.error(f'Error in data endpoint: {str(e)}')
+        return jsonify({'error': str(e)})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=8081)
