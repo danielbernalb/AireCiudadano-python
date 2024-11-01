@@ -1,4 +1,4 @@
-# p1claude5: Seguimos en pruebas
+# p1claude6: Seguimos en pruebas
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import requests
@@ -58,41 +58,27 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime):
 
     while current_start < end_datetime:
         current_end = min(current_start + chunk_size, end_datetime)
-        
-        # Obtener datos en intervalos de 1 minuto
+        # Usar step de 1 minuto
         chunk_data = get_data(url, variables, current_start, current_end, '1m', interval_minutes=60)
 
-        # Asegurar que 'date' es de tipo datetime
+        # Aplicar promedio horario al chunk
         chunk_data['date'] = pd.to_datetime(chunk_data['date'], utc=True)
-        
-        # Convertir a numérico antes de realizar la agregación
-        for col in variables:
-            if col in chunk_data.columns:
-                chunk_data[col] = pd.to_numeric(chunk_data[col], errors='coerce')
+        chunk_data.set_index(['station', 'date'], inplace=True)
+        chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
 
         hourly_chunks = []
-        for station in chunk_data['station'].unique():
-            station_data = chunk_data[chunk_data['station'] == station].copy()
-            station_data.set_index('date', inplace=True)
-            
-            # Resamplear datos a promedio por hora, ignorando columnas de tipo 'object'
-            numeric_columns = station_data.select_dtypes(include=[np.number]).columns
-            hourly_data = station_data[numeric_columns].resample('1h', offset='1min', closed='right', label='right').mean()
-            
+        for station, group in chunk_data.groupby('station'):
+            # Resamplear a intervalos horarios y calcular promedio
+            hourly_data = group.resample('1h', level='date').mean()
             hourly_data['station'] = station
             hourly_chunks.append(hourly_data.reset_index())
 
         chunk_data = pd.concat(hourly_chunks, ignore_index=True)
-
-        # Filtrar solo los datos dentro del rango solicitado
-        chunk_data = chunk_data[
-            (chunk_data['date'] >= start_datetime) & 
-            (chunk_data['date'] <= end_datetime)
-        ]
-        
         all_data.append(chunk_data)
+
         current_start = current_end
 
+        # Yield progress information
         progress = {
             'current_date': current_end.isoformat(),
             'progress_percentage': min(100, (current_end - start_datetime) / (end_datetime - start_datetime) * 100)
@@ -101,15 +87,12 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime):
 
     return all_data
 
-# Function to get data from API with adjusted time intervals
+# Get data from API with time intervals
 def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
     all_results = []
-    # Adjust start time by subtracting 60 minutes 
-#    current_start_time = start_datetime - datetime.timedelta(minutes=60)
-    current_start_time = start_datetime - datetime.timedelta(minutes=60)
+    current_start_time = start_datetime
 
     while current_start_time < end_datetime:
-        # Define the adjusted end time for each interval 
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
@@ -124,10 +107,9 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             # Si no hay datos en este intervalo, avanzar al siguiente
             if not data:
                 app.logger.warning(f"No data returned from API for interval {current_start_time} to {current_end_time}")
-                current_start_time = current_end_time  # Move to next hour
+                current_start_time = current_end_time
                 continue
 
-            # Convert data to DataFrame 
             df = pd.json_normalize(data)
 #            app.logger.debug(f"Dataframe shape after json_normalize: {df.shape}")
 
@@ -168,11 +150,6 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
                 continue
 
             try:
-            # Convertir columnas seleccionadas a numérico
-                for col in selected_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-
                 df_result = _wide_table(df, selected_cols)
             except Exception as pivot_error:
                 app.logger.warning(f"Error in pivot operation: {str(pivot_error)} for interval {current_start_time} to {current_end_time}")
@@ -197,7 +174,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
         except Exception as e:
             app.logger.error(f'Error processing data chunk: {str(e)}')
             # En caso de error, avanzar al siguiente intervalo en lugar de hacer raise
-            current_start_time = current_end_time  # Move to next hour
+            current_start_time = current_end_time
             continue
 
         current_start_time = current_end_time
@@ -205,7 +182,8 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
     # Si no tenemos resultados, devolver un DataFrame vacío con las columnas correctas
     if not all_results:
         app.logger.warning("No valid data found for entire time range")
-        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
+        columns = ['station', 'date'] + selected_cols
+        return pd.DataFrame(columns=columns)
 
     final_df = pd.concat(all_results, ignore_index=True)
     app.logger.debug(f"Final dataframe shape after concatenation: {final_df.shape}")
@@ -238,7 +216,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables union_claude5:</label><br>
+            <label for="variables">Select variables union_claude6:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -298,11 +276,9 @@ def data():
         station_filter = request.form.get('station_filter', '')
         result_format = request.form.get('result_format', 'screen')
 
-        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
+        start_datetime1 = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
+        start_datetime = start_datetime1 - datetime.timedelta(minutes=60)
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
-        
-        # Ajustar el tiempo de inicio para comenzar 60 minutos antes
-        query_start = start_datetime - datetime.timedelta(minutes=60)
         
         date_diff = end_datetime - start_datetime
         
@@ -323,8 +299,8 @@ def data():
             obs = pd.concat(all_data, ignore_index=True)
         else:
             # Obtener datos y redondear a 3 decimales todas las columnas numéricas
-            obs = get_data(f"{base_url}/query_range?query={query}", variables, query_start, end_datetime, '1m')
-            obs = obs.round(3)
+            obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m')
+#            obs = obs.round(3)
             
             # Apply hourly average
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
@@ -344,7 +320,7 @@ def data():
                 obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         # Redondear a 3 decimales antes de guardar en JSON o CSV
-        obs = obs.round(3)
+#        obs = obs.round(3)
 
         total_records = obs.shape[0]
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
