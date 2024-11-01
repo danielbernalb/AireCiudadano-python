@@ -58,27 +58,42 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime):
 
     while current_start < end_datetime:
         current_end = min(current_start + chunk_size, end_datetime)
-        # Usar step de 1 minuto
+        # Obtener datos del chunk
         chunk_data = get_data(url, variables, current_start, current_end, '1m', interval_minutes=60)
-
-        # Aplicar promedio horario al chunk
+        
+        # Asegurarse de que 'date' es una columna y no un índice
+        if 'date' not in chunk_data.columns and 'date' in chunk_data.index.names:
+            chunk_data = chunk_data.reset_index()
+        
+        # Convertir la columna date a datetime
         chunk_data['date'] = pd.to_datetime(chunk_data['date'], utc=True)
-        chunk_data.set_index(['station', 'date'], inplace=True)
-        chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
-
+        
+        # Aplicar promedio horario al chunk
         hourly_chunks = []
         for station, group in chunk_data.groupby('station'):
-            # Resamplear a intervalos horarios y calcular promedio
-            hourly_data = group.resample('1h', level='date').mean()
+            # Crear una copia del grupo para evitar advertencias de SettingWithCopyWarning
+            group = group.copy()
+            # Establecer el índice temporal
+            group.set_index('date', inplace=True)
+            # Resamplear usando el índice temporal
+            hourly_data = group.resample('1h', offset='0h').mean()
             hourly_data['station'] = station
-            hourly_chunks.append(hourly_data.reset_index())
-
+            # Asegurarse de que la fecha esté como columna
+            hourly_data = hourly_data.reset_index()
+            hourly_chunks.append(hourly_data)
+        
+        # Concatenar todos los chunks horarios
         chunk_data = pd.concat(hourly_chunks, ignore_index=True)
+        
+        # Aplicar filtro de estación si existe
+        if 'station_filter' in locals() and station_filter:
+            filters = station_filter.split(',')
+            chunk_data = chunk_data[chunk_data['station'].str.contains('|'.join(filters), case=False)]
+        
         all_data.append(chunk_data)
 
         current_start = current_end
 
-        # Yield progress information
         progress = {
             'current_date': current_end.isoformat(),
             'progress_percentage': min(100, (current_end - start_datetime) / (end_datetime - start_datetime) * 100)
@@ -276,9 +291,12 @@ def data():
         station_filter = request.form.get('station_filter', '')
         result_format = request.form.get('result_format', 'screen')
 
-        start_datetime1 = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
-        start_datetime = start_datetime1 - datetime.timedelta(minutes=60)
+        # Crear datetime con la hora exacta solicitada
+        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+
+        # Ajustar el tiempo de inicio para incluir la hora anterior para el promedio
+        query_start = start_datetime - datetime.timedelta(minutes=60) 
         
         date_diff = end_datetime - start_datetime
         
@@ -290,8 +308,7 @@ def data():
         # Process data
         if date_diff.days > 7:
             all_data = []
-            for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", 
-                                                             variables, start_datetime, end_datetime):
+            for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", variables, query_start, end_datetime):
                 if station_filter:
                     filters = station_filter.split(',')
                     chunk_data = chunk_data[chunk_data['station'].str.contains('|'.join(filters), case=False)]
@@ -299,28 +316,42 @@ def data():
             obs = pd.concat(all_data, ignore_index=True)
         else:
             # Obtener datos y redondear a 3 decimales todas las columnas numéricas
-            obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m')
-#            obs = obs.round(3)
+            obs = get_data(f"{base_url}/query_range?query={query}", variables, query_start, end_datetime, '1m')
+            obs = obs.round(3)
             
-            # Apply hourly average
+            # Convertir a datetime y establecer índice 
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
             obs = obs.apply(pd.to_numeric, errors='coerce')
             
+            # Calcular promedios horarios
             hourly_obs = []
             for station, group in obs.groupby('station'):
-                hourly_data = group.resample('1h', level='date').mean()
+            # Establecer el índice temporal para cada grupo
+                group = group.set_index('date')
+                # Convertir columnas numéricas
+                for col in variables:
+                    if col in group.columns:
+                        group[col] = pd.to_numeric(group[col], errors='coerce')
+                # Resamplear usando el índice temporal 
+                hourly_data = group.resample('1h', offset='0h').mean()
                 hourly_data['station'] = station
                 hourly_obs.append(hourly_data.reset_index())
             
             obs = pd.concat(hourly_obs, ignore_index=True)
+
+            # Filtrar solo las horas solicitadas
+            obs = obs[
+                (obs['date'] >= start_datetime) &
+                (obs['date'] <= end_datetime)
+            ]
             
             if station_filter:
                 filters = station_filter.split(',')
                 obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
         # Redondear a 3 decimales antes de guardar en JSON o CSV
-#        obs = obs.round(3)
+        obs = obs.round(3)
 
         total_records = obs.shape[0]
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
