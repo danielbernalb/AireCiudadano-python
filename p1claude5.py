@@ -97,18 +97,28 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
         app.logger.debug(f"Querying data from {current_start_time} to {current_end_time}")
-        app.logger.debug(f"url: {query_url}")
+#        app.logger.debug(f"url: {query_url}")
 
         try:
             response = requests.get(query_url)
             response.raise_for_status()
             data = response.json().get('data', {}).get('result', [])
+            
+            # Si no hay datos en este intervalo, avanzar al siguiente
             if not data:
-                app.logger.warning("No data returned from API in this interval.")
+                app.logger.warning(f"No data returned from API for interval {current_start_time} to {current_end_time}")
+                current_start_time = current_end_time
                 continue
 
             df = pd.json_normalize(data)
-            app.logger.debug(f"Dataframe shape after json_normalize: {df.shape}")
+#            app.logger.debug(f"Dataframe shape after json_normalize: {df.shape}")
+
+            # Verificar si tenemos las columnas necesarias antes de procesar
+            required_columns = ['metric.__name__', 'metric.exported_job', 'values'] if 'values' in df.columns else ['metric.__name__', 'metric.exported_job', 'value']
+            if not all(col in df.columns for col in required_columns):
+                app.logger.warning(f"Missing required columns for interval {current_start_time} to {current_end_time}")
+                current_start_time = current_end_time
+                continue
 
             # Explode values and check for presence of station column
             if 'values' in df.columns:
@@ -120,19 +130,33 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
                 df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
                 df['value'] = df['value'].apply(lambda x: x[1])
 
-            # Rename and validate presence of 'station' column
+            # Rename columns
             df = df.rename(columns={"metric.__name__": "metric_name", "metric.exported_job": "station"})
-            app.logger.debug(f"Columns in dataframe after renaming: {df.columns}")
+#            app.logger.debug(f"Columns in dataframe after renaming: {df.columns}")
 
-            # Check if 'station' column exists after renaming
+            # Verificar si tenemos la columna station después del renombrado
             if 'station' not in df.columns:
-                app.logger.error("Missing 'station' column after renaming.")
+                app.logger.warning(f"Missing 'station' column after renaming for interval {current_start_time} to {current_end_time}")
+                current_start_time = current_end_time
                 continue
 
+            # Filter out null stations
             df = df[df['station'].notnull()]
+            
+            # Si no quedan filas después del filtrado, avanzar al siguiente intervalo
+            if df.empty:
+                app.logger.warning(f"No valid data after filtering for interval {current_start_time} to {current_end_time}")
+                current_start_time = current_end_time
+                continue
 
-            df_result = _wide_table(df, selected_cols)
+            try:
+                df_result = _wide_table(df, selected_cols)
+            except Exception as pivot_error:
+                app.logger.warning(f"Error in pivot operation: {str(pivot_error)} for interval {current_start_time} to {current_end_time}")
+                current_start_time = current_end_time
+                continue
 
+            # Convert numeric columns
             for col in selected_cols:
                 if col in df_result.columns:
                     df_result[col] = df_result[col].astype(float)
@@ -141,16 +165,27 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             if 'Longitude' in df_result.columns:
                 df_result['Longitude'].replace(0, np.nan, inplace=True)
 
-            app.logger.debug(f"Dataframe shape after processing and cleaning: {df_result.shape}")
+#            app.logger.debug(f"Dataframe shape after processing and cleaning: {df_result.shape}")
             all_results.append(df_result)
 
-        except Exception as e:
-            app.logger.error(f'Error fetching data chunk: {str(e)}')
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f'Network error fetching data chunk: {str(e)}')
             raise
+        except Exception as e:
+            app.logger.error(f'Error processing data chunk: {str(e)}')
+            # En caso de error, avanzar al siguiente intervalo en lugar de hacer raise
+            current_start_time = current_end_time
+            continue
 
         current_start_time = current_end_time
 
-    final_df = pd.concat(all_results, ignore_index=True) if all_results else pd.DataFrame(columns=selected_cols)
+    # Si no tenemos resultados, devolver un DataFrame vacío con las columnas correctas
+    if not all_results:
+        app.logger.warning("No valid data found for entire time range")
+        columns = ['station', 'date'] + selected_cols
+        return pd.DataFrame(columns=columns)
+
+    final_df = pd.concat(all_results, ignore_index=True)
     app.logger.debug(f"Final dataframe shape after concatenation: {final_df.shape}")
     return final_df
 
@@ -316,7 +351,7 @@ def data():
         }
 
         if result_format == 'screen':
-            app.logger.debug(f"Data resultin screen")
+            app.logger.debug(f"Data result in screen")
             return jsonify(result_data)
         else:
             # Crear y enviar archivo

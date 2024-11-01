@@ -6,6 +6,7 @@ import pandas as pd
 import datetime
 import numpy as np
 import json
+import logging
 
 # Constants
 selected_cols = [
@@ -16,6 +17,7 @@ selected_cols = [
 
 # Flask application
 app = Flask(__name__)
+app.logger.setLevel(logging.DEBUG) 
 
 # Get data from API
 def get_data(url, selected_cols):
@@ -158,10 +160,12 @@ def data():
     start_datetime = f"{start_date}T{start_time}:00Z"
     start_datetime_adjusted = (datetime.datetime.fromisoformat(start_datetime[:-1]) - datetime.timedelta(hours=1)).isoformat() + 'Z'
     end_datetime = f"{end_date}T{end_time}:00Z"
+    app.logger.debug(f"Querying data from {start_datetime_adjusted} to {end_datetime}")
 
     if aggregation_method == 'average':
         step = '1m'
         url = f"{base_url}/query_range?query={query}&start={start_datetime_adjusted}&end={end_datetime}&step={step}"
+        app.logger.debug(f"url: {url}")
     else:
         step = _get_step(step_number, step_option)
         url = f"{base_url}/query_range?query={query}&start={start_datetime}&end={end_datetime}&step={step}"
