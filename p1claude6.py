@@ -1,6 +1,4 @@
-# p1claude7: Seguimos en pruebas
-
-Aparece todo bien pero el resultado esta una hora atrasada, falta eso y revisar duracion durante el tiempo
+# p1claude7: Parece todo bien, seguir probando. 4 meses van bien.
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import requests
@@ -20,11 +18,11 @@ selected_cols = [
 
 # Flask application
 app = Flask(__name__)
-app.logger.setLevel(logging.DEBUG) 
+app.logger.setLevel(logging.DEBUG)
 
 def create_zip_file(data, file_format='json'):
     memory_file = io.BytesIO()
-    
+
     try:
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             if file_format == 'json':
@@ -39,16 +37,16 @@ def create_zip_file(data, file_format='json'):
                         record['station'] = station
                         rows.append(record)
                 df = pd.DataFrame(rows)
-                
+
                 # Convert to CSV string
                 csv_buffer = io.StringIO()
                 df.to_csv(csv_buffer, index=False)
                 zf.writestr('data.csv', csv_buffer.getvalue())
-        
+
         # Important: seek to beginning of file
         memory_file.seek(0)
         return memory_file
-    
+
     except Exception as e:
         app.logger.error(f'Error creating zip file: {str(e)}')
         raise
@@ -73,6 +71,7 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime):
         for station, group in chunk_data.groupby('station'):
             # Resamplear a intervalos horarios y calcular promedio
             hourly_data = group.resample('1h', level='date').mean()
+            hourly_data.index = hourly_data.index + pd.Timedelta(hours=1)
             hourly_data['station'] = station
             hourly_chunks.append(hourly_data.reset_index())
 
@@ -97,16 +96,17 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
 
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
-        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+        current_start_time_1s = current_start_time + pd.Timedelta(seconds=1)
+        query_url = f"{url}&start={current_start_time_1s.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
 
-        app.logger.debug(f"Querying data from {current_start_time} to {current_end_time}")
-#        app.logger.debug(f"url: {query_url}")
+        app.logger.debug(f"Querying data from {current_start_time_1s} to {current_end_time}")
+        app.logger.debug(f"url: {query_url}")
 
         try:
             response = requests.get(query_url)
             response.raise_for_status()
             data = response.json().get('data', {}).get('result', [])
-            
+
             # Si no hay datos en este intervalo, avanzar al siguiente
             if not data:
                 app.logger.warning(f"No data returned from API for interval {current_start_time} to {current_end_time}")
@@ -145,7 +145,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
 
             # Filter out null stations
             df = df[df['station'].notnull()]
-            
+
             # Si no quedan filas después del filtrado, avanzar al siguiente intervalo
             if df.empty:
                 app.logger.warning(f"No valid data after filtering for interval {current_start_time} to {current_end_time}")
@@ -219,7 +219,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <label for="variables">Select variables union_claude7:</label><br>
+            <label for="variables">Select variables union_claude11:</label><br>
             <input type="checkbox" id="select_all" onclick="toggle(this);">
             <label for="select_all">Select/Deselect All</label><br>
             {% for col in selected_cols %}
@@ -260,7 +260,7 @@ def index():
                 }
             }
         </script>
-    ''', selected_cols=selected_cols, variables=variables, start_date=start_date, 
+    ''', selected_cols=selected_cols, variables=variables, start_date=start_date,
        start_time=start_time, end_date=end_date, end_time=end_time)
 
 @app.route('/dataresult', methods=['POST'])
@@ -281,9 +281,9 @@ def data():
 
         # Se elimina la resta de una hora
         start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}") - datetime.timedelta(minutes=60)
-        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}") - datetime.timedelta(minutes=60)        
-        date_diff = end_datetime - start_datetime
-        
+        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+        date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
+
         if date_diff.days > 7 and result_format == 'screen':
             return jsonify({
                 'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
@@ -301,23 +301,31 @@ def data():
         else:
             # Obtener datos y redondear a 3 decimales todas las columnas numéricas
             obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m')
-            
+
             # Apply hourly average
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
             obs = obs.apply(pd.to_numeric, errors='coerce')
-            
+
             hourly_obs = []
             for station, group in obs.groupby('station'):
                 hourly_data = group.resample('1h', level='date').mean()
+                hourly_data.index = hourly_data.index + pd.Timedelta(hours=1)
                 hourly_data['station'] = station
                 hourly_obs.append(hourly_data.reset_index())
-            
+
             obs = pd.concat(hourly_obs, ignore_index=True)
-            
+
             if station_filter:
                 filters = station_filter.split(',')
                 obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+
+        # Convertir las fechas a UTC
+        start_datetime = pd.to_datetime(start_datetime).tz_localize('UTC')
+        end_datetime = pd.to_datetime(end_datetime).tz_localize('UTC')
+
+        # Filtrar el DataFrame por el rango de fechas
+        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
 
         # Redondear a 3 decimales antes de guardar en JSON o CSV
         obs = obs.round(3)
@@ -325,7 +333,7 @@ def data():
         total_records = obs.shape[0]
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         json_data = obs.to_dict(orient='records')
-        
+
         # Clean up NaN values
         for record in json_data:
             for key, value in record.items():
@@ -358,10 +366,10 @@ def data():
             # Crear y enviar archivo
             try:
                 memory_file = create_zip_file(result_data, 'json' if result_format == 'filejson' else 'csv')
-                
+
                 timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
                 filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
-                app.logger.debug(f"Data result in file")                
+                app.logger.debug(f"Data result in file")
                 return Response(
                     memory_file.getvalue(),
                     mimetype='application/zip',
@@ -370,7 +378,7 @@ def data():
                         'Content-Type': 'application/zip'
                     }
                 )
-            
+
             except Exception as e:
                 app.logger.error(f'Error creating download file: {str(e)}')
                 return jsonify({'error': f'Error creating download file: {str(e)}'})
