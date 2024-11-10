@@ -285,6 +285,11 @@ def data():
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
 
+        if date_diff.days > 100:
+            return jsonify({
+                'error': 'El rango de fechas es demasiado largo. Segmenta y/o reduce el rango a 100 días o menos para evitar problemas de bloqueos por RAM y CPU del servidor'
+            })
+
         if date_diff.days > 7 and result_format == 'screen':
             return jsonify({
                 'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
