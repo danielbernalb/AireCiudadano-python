@@ -4,7 +4,7 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from matplotlib.colors import ListedColormap
+from mpl_toolkits.basemap import Basemap  # Librería para mapas
 import numpy as np
 
 app = Flask(__name__)
@@ -41,19 +41,20 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-# Crear mapa de animación
+# Crear mapa de animación con Basemap
 def create_animation(df, output_path, fps=2, size_scale=2):
-    # Configuración del mapa
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.set_title("Animación de PM2.5 por Estación", fontsize=16)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
+    # Configuración del mapa con Basemap
+    fig, ax = plt.subplots(figsize=(12, 10))
+    m = Basemap(projection="merc",
+                llcrnrlat=df["Latitude"].min() - 0.1, urcrnrlat=df["Latitude"].max() + 0.1,
+                llcrnrlon=df["Longitude"].min() - 0.1, urcrnrlon=df["Longitude"].max() + 0.1,
+                resolution="i", ax=ax)
+    m.drawcoastlines()
+    m.drawcountries()
+    m.drawmapboundary(fill_color="lightblue")
+    m.fillcontinents(color="beige", lake_color="lightblue")
 
-    scatter = ax.scatter([], [], s=[], c=[], cmap=ListedColormap(["green", "yellow", "orange", "red", "purple", "brown"]), alpha=0.7)
-
-    # Límites del mapa
-    ax.set_xlim(df["Longitude"].min() - 0.01, df["Longitude"].max() + 0.01)
-    ax.set_ylim(df["Latitude"].min() - 0.01, df["Latitude"].max() + 0.01)
+    scatter = m.scatter([], [], latlon=True, s=[], c=[], cmap="viridis", alpha=0.7)
 
     # Leyenda de colores
     color_legend = [
@@ -86,7 +87,7 @@ def create_animation(df, output_path, fps=2, size_scale=2):
 
         sizes = data_frame["PM25"] * size_scale  # Tamaño proporcional al PM2.5
         colors = data_frame["PM25"].apply(pm25_to_color)
-        scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
+        scatter.set_offsets(list(zip(data_frame["Longitude"], data_frame["Latitude"])))
         scatter.set_sizes(sizes)
         scatter.set_color(colors)
 
@@ -96,7 +97,7 @@ def create_animation(df, output_path, fps=2, size_scale=2):
     # Crear la animación
     total_frames = len(df['date'].unique())
     ani = FuncAnimation(fig, update, frames=total_frames, repeat=False)
-    
+
     # Guardar como video
     ani.save(output_path, writer="ffmpeg", fps=fps)
 
@@ -159,6 +160,6 @@ def getdata():
     </body>
     </html>
     ''')
-    
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8083)
