@@ -4,7 +4,9 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from mpl_toolkits.basemap import Basemap  # Librería para mapas
+import cartopy.crs as ccrs  # Cartopy para mapas geográficos
+import cartopy.feature as cfeature  # Detalles adicionales del mapa
+from cartopy.io.img_tiles import OSM  # Fondo de OpenStreetMap
 import numpy as np
 
 app = Flask(__name__)
@@ -41,40 +43,24 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-# Crear mapa de animación con Basemap
+# Crear mapa de animación con Cartopy
 def create_animation(df, output_path, fps=2, size_scale=2):
-    # Configuración del mapa con Basemap
-    fig, ax = plt.subplots(figsize=(12, 10))
-    m = Basemap(projection="merc",
-                llcrnrlat=df["Latitude"].min() - 0.1, urcrnrlat=df["Latitude"].max() + 0.1,
-                llcrnrlon=df["Longitude"].min() - 0.1, urcrnrlon=df["Longitude"].max() + 0.1,
-                resolution="i", ax=ax)
-    m.drawcoastlines()
-    m.drawcountries()
-    m.drawmapboundary(fill_color="lightblue")
-    m.fillcontinents(color="beige", lake_color="lightblue")
+    # Configuración del mapa con Cartopy
+    fig = plt.figure(figsize=(12, 10))
+    ax = plt.axes(projection=ccrs.PlateCarree())  # Proyección geográfica
+    ax.set_extent([
+        df["Longitude"].min() - 0.1, df["Longitude"].max() + 0.1,
+        df["Latitude"].min() - 0.1, df["Latitude"].max() + 0.1
+    ], crs=ccrs.PlateCarree())
 
-    scatter = m.scatter([], [], latlon=True, s=[], c=[], cmap="viridis", alpha=0.7)
+    # Fondo actualizado con OpenStreetMap
+    tile = OSM()  # Fondo basado en OpenStreetMap
+    ax.add_image(tile, 8)
+    ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
+    ax.add_feature(cfeature.COASTLINE, edgecolor='black')
 
-    # Leyenda de colores
-    color_legend = [
-        ("0-12", "green"),
-        ("13-34", "yellow"),
-        ("35-54", "orange"),
-        ("55-149", "red"),
-        ("150-249", "purple"),
-        (">=250", "brown")
-    ]
-    legend_table = plt.table(
-        cellText=[[f"{label}"] for label, _ in color_legend],
-        rowLabels=[f"{label}" for label, _ in color_legend],
-        cellColours=[[plt.cm.colors.to_rgba(color)] for _, color in color_legend],
-        colLabels=["PM2.5 Scale"],
-        loc="lower left",
-        bbox=[0.01, 0.01, 0.2, 0.3]
-    )
-    legend_table.auto_set_font_size(False)
-    legend_table.set_fontsize(8)
+    # Preparar los puntos
+    scatter = ax.scatter([], [], s=[], c=[], transform=ccrs.PlateCarree(), alpha=0.7)
 
     # Función de actualización por frame
     def update(frame):
@@ -87,7 +73,7 @@ def create_animation(df, output_path, fps=2, size_scale=2):
 
         sizes = data_frame["PM25"] * size_scale  # Tamaño proporcional al PM2.5
         colors = data_frame["PM25"].apply(pm25_to_color)
-        scatter.set_offsets(list(zip(data_frame["Longitude"], data_frame["Latitude"])))
+        scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
         scatter.set_sizes(sizes)
         scatter.set_color(colors)
 

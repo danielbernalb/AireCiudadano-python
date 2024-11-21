@@ -1,11 +1,12 @@
-from flask import Flask, request, send_file
+from flask import Flask, request, render_template_string, send_file
 import json
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from io import BytesIO
-import imageio
 import numpy as np
+from io import BytesIO
+import tempfile
 
 app = Flask(__name__)
 
@@ -37,13 +38,18 @@ def getdata():
         
         # Prepare data for animation
         frames = []
-        fig = plt.figure(figsize=(8, 6), dpi=100)
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-        ax.set_global()
-        ax.add_feature(cfeature.COASTLINE)
-        ax.add_feature(cfeature.BORDERS)
-        ax.add_feature(cfeature.LAND, color='lightgray')
-        ax.add_feature(cfeature.OCEAN, color='white')
+        for timestamp in timestamps:
+            frame = {}
+            for station, records in filtered_data.items():
+                for record in records:
+                    if record['date'] == timestamp:
+                        frame[station] = {
+                            'PM25': record['PM25'],
+                            'Latitude': record['Latitude'],
+                            'Longitude': record['Longitude']
+                        }
+                        break
+            frames.append(frame)
         
         # Define color mapping
         def get_color(pm25):
@@ -60,7 +66,21 @@ def getdata():
             else:
                 return 'brown'
         
-        # Initialize scatter plot
+        # Set up the plot with cartopy
+        fig = plt.figure()
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        ax.set_global()
+        ax.add_feature(cfeature.COASTLINE)
+        ax.add_feature(cfeature.BORDERS)
+        ax.add_feature(cfeature.LAND, color='lightgray')
+        ax.add_feature(cfeature.OCEAN, color='white')
+        
+        # Find min and max latitude and longitude for zooming
+        lats = [record['Latitude'] for records in filtered_data.values() for record in records]
+        lons = [record['Longitude'] for records in filtered_data.values() for record in records]
+        ax.set_extent([min(lons)-0.1, max(lons)+0.1, min(lats)-0.1, max(lats)+0.1], crs=ccrs.PlateCarree())
+        
+        # Scatter plot placeholder
         scat = ax.scatter([], [], c=[], s=scale, transform=ccrs.PlateCarree())
         
         # Add legend
@@ -75,48 +95,36 @@ def getdata():
         ax.legend(handles=legend_elements, loc='lower left')
         
         # Text for date and time
-        text = ax.text(0, 0, '', transform=ccrs.PlateCarree(), ha='left', va='top')
+        text = ax.text(min(lons)-0.05, max(lats)+0.05, '', transform=ccrs.PlateCarree(), ha='left', va='top')
         
-        # Collect frames
-        for timestamp in timestamps:
-            # Prepare data for this frame
-            lons = []
-            lats = []
-            pm25s = []
-            for station, records in filtered_data.items():
-                for record in records:
-                    if record['date'] == timestamp:
-                        lons.append(record['Longitude'])
-                        lats.append(record['Latitude'])
-                        pm25s.append(record['PM25'])
-                        break
-            # Update scatter plot
+        # Animation function
+        def animate(i):
+            frame_data = frames[i]
+            lons = [record['Longitude'] for record in frame_data.values()]
+            lats = [record['Latitude'] for record in frame_data.values()]
+            pm25s = [record['PM25'] for record in frame_data.values()]
+            colors = [get_color(pm25) for pm25 in pm25s]
             scat.set_offsets(np.column_stack((lons, lats)))
-            scat.set_color([get_color(pm25) for pm25 in pm25s])
+            scat.set_color(colors)
             scat.set_sizes([scale]*len(lons))
-            text.set_text(timestamp)
-            
-            # Save the figure to a BytesIO buffer
-            img_buffer = BytesIO()
-            plt.savefig(img_buffer, format='png', dpi=100)
-            img_buffer.seek(0)
-            
-            # Read the image and append to frames
-            image = imageio.imread(img_buffer)
-            frames.append(image)
+            text.set_text(timestamps[i])
+            return scat, text
         
-        # Create a BytesIO buffer for the output video
-        video_buffer = BytesIO()
-        imageio.mimsave(video_buffer, frames, format='mp4', fps=fps)
-        video_buffer.seek(0)
+        # Create animation
+        ani = animation.FuncAnimation(fig, animate, frames=len(frames), interval=1000/fps)
         
-        # Send the video buffer to the client for download
-        return send_file(
-            video_buffer,
-            as_attachment=True,
-            download_name='animation.mp4',
-            mimetype='video/mp4'
-        )
+        # Save animation to a temporary file
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
+            ani.save(tmp_file.name, writer=animation.FFMpegWriter(fps=fps))
+            tmp_file.seek(0)
+            response = send_file(
+                tmp_file.name,
+                as_attachment=True,
+                download_name='animation.mp4',
+                mimetype='video/mp4'
+            )
+        
+        return response
     
     # HTML form embedded in Python code
     html_content = '''
@@ -142,4 +150,4 @@ def getdata():
     return render_template_string(html_content)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=8084)
