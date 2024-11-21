@@ -3,6 +3,7 @@ import os
 import json
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -64,7 +65,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         ]
     
     # Configuración del mapa con Cartopy
-    fig = plt.figure(figsize=(15, 12), dpi=200)
+    fig = plt.figure(figsize=(12, 10), dpi=200)  # Tamaño más ajustado
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
     
@@ -79,25 +80,30 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
     
-    # Preparar los puntos
-    scatter = ax.scatter([], [], s=50, c=[], transform=ccrs.PlateCarree(), alpha=1.0, edgecolor="none", rasterized=False)
+    # Ajustar márgenes para minimizar espacio blanco
+    plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.02)
+    
+    # Preparar los puntos sólidos
+    scatter = ax.scatter(
+        [], [], s=70, c=[], transform=ccrs.PlateCarree(), alpha=1.0, edgecolors='none'  # Puntos sólidos
+    )
     
     # Leyenda de colores en la esquina inferior izquierda
     legend_colors = {
         "green": "0-12 μg/m³ (Bueno)",
         "yellow": "13-34 μg/m³ (Moderado)",
-        "orange": "35-54 μg/m³ (No saludable para grupos sensibles)",
-        "red": "55-149 μg/m³ (No saludable)",
-        "purple": "150-249 μg/m³ (Muy no saludable)",
+        "orange": "35-54 μg/m³ (Dañino grupos sensibles)",
+        "red": "55-149 μg/m³ (Dañino)",
+        "purple": "150-249 μg/m³ (Muy daniño)",
         "brown": "250+ μg/m³ (Peligroso)"
     }
     for color, label in legend_colors.items():
-        ax.scatter([], [], color=color, label=label, s=100, alpha=1.0)
+        ax.scatter([], [], color=color, label=label, s=180, alpha=1.0)  # Tamaño aumentado
     ax.legend(
         title="Niveles PM2.5",
         loc="lower left",
-        fontsize=8,
-        title_fontsize=10,
+        fontsize=12,       # Texto más grande
+        title_fontsize=14, # Título más grande
         frameon=True,
         facecolor="white",
         edgecolor="black"
@@ -110,11 +116,22 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         data_frame = data_frame[data_frame['InOut'] == 0.0]
         colors = data_frame["PM25"].apply(pm25_to_color)
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
-        scatter.set_color(colors)
-        ax.set_title(f"PM2.5 Animación - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=16)  # Título más grande
+        scatter.set_facecolor(colors)  # Asegurar colores sólidos
+        ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=20)  # Título más grande
     
     total_frames = len(df['date'].unique())
-    ani = FuncAnimation(fig, update, frames=total_frames, repeat=False)
+    
+    # Configuración para tiempo adicional en la última frame
+    extra_time_frames = fps * 2  # Tiempo adicional de 2 segundos
+    total_frames_with_extra = total_frames + extra_time_frames
+
+    def extended_update(frame):
+        if frame < total_frames:
+            update(frame)
+        else:
+            update(total_frames - 1)  # Repite la última frame
+
+    ani = FuncAnimation(fig, extended_update, frames=total_frames_with_extra, repeat=False)
     
     writer = FFMpegWriter(fps=fps, metadata=dict(artist='Me'), bitrate=1800)
     ani.save(output_path, writer=writer)
