@@ -1,153 +1,200 @@
-from flask import Flask, request, render_template_string, send_file
+from flask import Flask, request, render_template_string, jsonify, send_file
+import os
 import json
+import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+from matplotlib.animation import FuncAnimation, FFMpegWriter
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from cartopy.io import img_tiles
 import numpy as np
-from io import BytesIO
-import tempfile
+import contextily as ctx
 
 app = Flask(__name__)
+app.logger.setLevel("DEBUG")
+
+UPLOAD_FOLDER = "uploads"
+OUTPUT_FOLDER = "output"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# Escala de colores basada en PM25
+def pm25_to_color(pm25):
+    if pm25 < 13:
+        return "green"
+    elif 13 <= pm25 < 35:
+        return "yellow"
+    elif 35 <= pm25 < 55:
+        return "orange"
+    elif 55 <= pm25 < 150:
+        return "red"
+    elif 150 <= pm25 < 250:
+        return "purple"
+    else:
+        return "brown"
+
+# Crear DataFrame consolidado para animación
+def create_dataframe(json_data):
+    records = []
+    for station, entries in json_data.items():
+        for entry in entries:
+            entry["station"] = station
+            records.append(entry)
+    df = pd.DataFrame(records)
+    df['date'] = pd.to_datetime(df['date'])
+    return df
+
+# Crear mapa de animación con Cartopy
+# Crear mapa de animación con Cartopy
+def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=8, center_lat=None, center_lon=None):
+    # Determine map extent based on user input or data
+    if center_lat is not None and center_lon is not None:
+        center = [center_lon, center_lat]
+        resolution = 360 / (2 ** zoom)
+        half_size_lon = 0.5 * resolution
+        half_size_lat = 0.5 * resolution
+        extent = [
+            center[0] - half_size_lon, center[0] + half_size_lon,
+            center[1] - half_size_lat, center[1] + half_size_lat
+        ]
+    else:
+        extent = [
+            df["Longitude"].min() - 0.1, df["Longitude"].max() + 0.1,
+            df["Latitude"].min() - 0.1, df["Latitude"].max() + 0.1
+        ]
+    
+    # Configuración del mapa con Cartopy
+    fig = plt.figure(figsize=(15, 12), dpi=200)
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+    
+    # Add basemap using contextily with a gray background
+    ctx.add_basemap(
+        ax,
+        source="https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png",
+        crs=ccrs.PlateCarree(),
+        zoom=zoom
+    )
+    
+    ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
+    ax.add_feature(cfeature.COASTLINE, edgecolor='black')
+    
+    # Preparar los puntos
+    scatter = ax.scatter([], [], s=50, c=[], transform=ccrs.PlateCarree(), alpha=1.0, edgecolor="none", rasterized=False)
+    
+    # Leyenda de colores en la esquina inferior izquierda
+    legend_colors = {
+        "green": "0-12 μg/m³ (Bueno)",
+        "yellow": "13-34 μg/m³ (Moderado)",
+        "orange": "35-54 μg/m³ (No saludable para grupos sensibles)",
+        "red": "55-149 μg/m³ (No saludable)",
+        "purple": "150-249 μg/m³ (Muy no saludable)",
+        "brown": "250+ μg/m³ (Peligroso)"
+    }
+    for color, label in legend_colors.items():
+        ax.scatter([], [], color=color, label=label, s=100, alpha=1.0)
+    ax.legend(
+        title="Niveles PM2.5",
+        loc="lower left",
+        fontsize=8,
+        title_fontsize=10,
+        frameon=True,
+        facecolor="white",
+        edgecolor="black"
+    )
+    
+    # Función de actualización por frame
+    def update(frame):
+        current_time = sorted(df['date'].unique())[frame]
+        data_frame = df[df['date'] == current_time]
+        data_frame = data_frame[data_frame['InOut'] == 0.0]
+        colors = data_frame["PM25"].apply(pm25_to_color)
+        scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
+        scatter.set_color(colors)
+        ax.set_title(f"PM2.5 Animación - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=16)  # Título más grande
+    
+    total_frames = len(df['date'].unique())
+    ani = FuncAnimation(fig, update, frames=total_frames, repeat=False)
+    
+    writer = FFMpegWriter(fps=fps, metadata=dict(artist='Me'), bitrate=1800)
+    ani.save(output_path, writer=writer)
 
 @app.route('/getdata', methods=['GET', 'POST'])
 def getdata():
     if request.method == 'POST':
-        # Retrieve the file and parameters from the form
-        file = request.files['file']
-        fps = float(request.form['fps'])
-        scale = float(request.form['scale'])
+        file = request.files.get('file')
+        fps = request.form.get('fps', 2, type=int)
+        size_scale = request.form.get('size_scale', 2, type=int)
+        map_style = request.form.get('map_style', 'osm')
+        zoom = request.form.get('zoom', 8, type=int)
+        center_lat = request.form.get('center_lat', type=float)
+        center_lon = request.form.get('center_lon', type=float)
         
-        # Load JSON data
-        data = json.load(file)
-        stations_data = data['data']
+        if not file:
+            return jsonify({"error": "No file uploaded"})
+        if not file.filename.endswith('.json'):
+            return jsonify({"error": "Only JSON files are allowed"})
+        if center_lat is None or center_lon is None:
+            return jsonify({"error": "Invalid coordinates"})
         
-        # Filter data points where InOut is 0.0
-        filtered_data = {}
-        for station, records in stations_data.items():
-            filtered_records = [record for record in records if record['InOut'] == 0.0]
-            if filtered_records:
-                filtered_data[station] = filtered_records
+        save_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        file.save(save_path)
         
-        # Collect all timestamps
-        timestamps = set()
-        for records in filtered_data.values():
-            for record in records:
-                timestamps.add(record['date'])
-        timestamps = sorted(timestamps)
+        with open(save_path, 'r') as f:
+            json_data = json.load(f)
+        df = create_dataframe(json_data["data"])
         
-        # Prepare data for animation
-        frames = []
-        for timestamp in timestamps:
-            frame = {}
-            for station, records in filtered_data.items():
-                for record in records:
-                    if record['date'] == timestamp:
-                        frame[station] = {
-                            'PM25': record['PM25'],
-                            'Latitude': record['Latitude'],
-                            'Longitude': record['Longitude']
-                        }
-                        break
-            frames.append(frame)
+        output_file = os.path.join(OUTPUT_FOLDER, "pm25_animation.mp4")
+        try:
+            create_animation(df, output_file, fps=fps, size_scale=size_scale,
+                             map_style=map_style, zoom=zoom,
+                             center_lat=center_lat, center_lon=center_lon)
+        except Exception as e:
+            return jsonify({"error": f"Error generating animation: {e}"})
         
-        # Define color mapping
-        def get_color(pm25):
-            if pm25 < 12:
-                return 'green'
-            elif 12 <= pm25 < 34:
-                return 'yellow'
-            elif 34 <= pm25 < 54:
-                return 'orange'
-            elif 54 <= pm25 < 149:
-                return 'red'
-            elif 149 <= pm25 < 249:
-                return 'purple'
-            else:
-                return 'brown'
-        
-        # Set up the plot with cartopy
-        fig = plt.figure()
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-        ax.set_global()
-        ax.add_feature(cfeature.COASTLINE)
-        ax.add_feature(cfeature.BORDERS)
-        ax.add_feature(cfeature.LAND, color='lightgray')
-        ax.add_feature(cfeature.OCEAN, color='white')
-        
-        # Find min and max latitude and longitude for zooming
-        lats = [record['Latitude'] for records in filtered_data.values() for record in records]
-        lons = [record['Longitude'] for records in filtered_data.values() for record in records]
-        ax.set_extent([min(lons)-0.1, max(lons)+0.1, min(lats)-0.1, max(lats)+0.1], crs=ccrs.PlateCarree())
-        
-        # Scatter plot placeholder
-        scat = ax.scatter([], [], c=[], s=scale, transform=ccrs.PlateCarree())
-        
-        # Add legend
-        legend_elements = [
-            plt.Line2D([0], [0], marker='o', color='w', label='0 - 12', markerfacecolor='green', markersize=10),
-            plt.Line2D([0], [0], marker='o', color='w', label='13 - 34', markerfacecolor='yellow', markersize=10),
-            plt.Line2D([0], [0], marker='o', color='w', label='35 - 54', markerfacecolor='orange', markersize=10),
-            plt.Line2D([0], [0], marker='o', color='w', label='55 - 149', markerfacecolor='red', markersize=10),
-            plt.Line2D([0], [0], marker='o', color='w', label='150 - 249', markerfacecolor='purple', markersize=10),
-            plt.Line2D([0], [0], marker='o', color='w', label='>=250', markerfacecolor='brown', markersize=10)
-        ]
-        ax.legend(handles=legend_elements, loc='lower left')
-        
-        # Text for date and time
-        text = ax.text(min(lons)-0.05, max(lats)+0.05, '', transform=ccrs.PlateCarree(), ha='left', va='top')
-        
-        # Animation function
-        def animate(i):
-            frame_data = frames[i]
-            lons = [record['Longitude'] for record in frame_data.values()]
-            lats = [record['Latitude'] for record in frame_data.values()]
-            pm25s = [record['PM25'] for record in frame_data.values()]
-            colors = [get_color(pm25) for pm25 in pm25s]
-            scat.set_offsets(np.column_stack((lons, lats)))
-            scat.set_color(colors)
-            scat.set_sizes([scale]*len(lons))
-            text.set_text(timestamps[i])
-            return scat, text
-        
-        # Create animation
-        ani = animation.FuncAnimation(fig, animate, frames=len(frames), interval=1000/fps)
-        
-        # Save animation to a temporary file
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
-            ani.save(tmp_file.name, writer=animation.FFMpegWriter(fps=fps))
-            tmp_file.seek(0)
-            response = send_file(
-                tmp_file.name,
-                as_attachment=True,
-                download_name='animation.mp4',
-                mimetype='video/mp4'
-            )
-        
-        return response
+        return send_file(output_file, as_attachment=True)
     
-    # HTML form embedded in Python code
-    html_content = '''
+    return render_template_string('''
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <title>Upload JSON and Set Parameters</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>PM2.5 Animation Data Upload</title>
     </head>
     <body>
-        <h1>Upload JSON File and Set Animation Parameters</h1>
-        <form method="post" enctype="multipart/form-data" action="/getdata">
-            <input type="file" name="file" required><br>
-            <label for="fps">Animation FPS:</label>
-            <input type="number" step="0.1" name="fps" value="10" required><br>
-            <label for="scale">Point Size Scale:</label>
-            <input type="number" step="1" name="scale" value="50" required><br>
-            <button type="submit">Generate Animation</button>
+        <h2>Sube tu archivo JSON para animación de PM2.5</h2>
+        <form action="/getdata" method="post" enctype="multipart/form-data">
+            <label for="file">Seleccionar archivo JSON:</label><br>
+            <input type="file" id="file" name="file" accept=".json" required><br><br>
+            
+            <label for="fps">Velocidad de animación (FPS):</label><br>
+            <input type="number" id="fps" name="fps" value="2" min="1" max="60" required><br><br>
+            
+            <label for="size_scale">Tamaño de puntos (escala):</label><br>
+            <input type="number" id="size_scale" name="size_scale" value="2" min="1" max="10" required><br><br>
+            
+            <label for="map_style">Estilo de mapa:</label><br>
+            <select id="map_style" name="map_style">
+                <option value="osm">OpenStreetMap</option>
+                <option value="satellite">Satellite</option>
+                <option value="cartodb">CartoDB</option>
+            </select><br><br>
+            
+            <label for="zoom">Nivel de zoom:</label><br>
+            <input type="number" id="zoom" name="zoom" value="8" min="1" max="18" required><br><br>
+            
+            <label for="center_lat">Latitud central:</label><br>
+            <input type="number" id="center_lat" name="center_lat" step="0.0001" required><br><br>
+            
+            <label for="center_lon">Longitud central:</label><br>
+            <input type="number" id="center_lon" name="center_lon" step="0.0001" required><br><br>
+            
+            <button type="submit">Subir y Configurar</button>
         </form>
     </body>
     </html>
-    '''
-    return render_template_string(html_content)
+    ''')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8084)
