@@ -13,7 +13,7 @@ import logging
 
 # Constants
 selected_cols = [
-    "PM25raw", "Humidity", "Temperature", "ConfigVal",
+    "PM25", "PM25raw", "Humidity", "Temperature", "ConfigVal", "Latitude", "Longitude", "InOut",
 ]
 
 # Flask application
@@ -25,23 +25,9 @@ def create_zip_file(data, file_format='json'):
 
     try:
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            if file_format == 'json':
-                # Convert data to JSON string
-                data_str = json.dumps(data, indent=2)
-                zf.writestr('data.json', data_str)
-            else:  # csv
-                # Convert nested dict to flat dataframe
-                rows = []
-                for station, records in data['data'].items():
-                    for record in records:
-                        record['station'] = station
-                        rows.append(record)
-                df = pd.DataFrame(rows)
-
-                # Convert to CSV string
-                csv_buffer = io.StringIO()
-                df.to_csv(csv_buffer, index=False)
-                zf.writestr('data.csv', csv_buffer.getvalue())
+            # Convert data to JSON string
+            data_str = json.dumps(data, indent=2)
+            zf.writestr('data.json', data_str)
 
         # Important: seek to beginning of file
         memory_file.seek(0)
@@ -51,7 +37,7 @@ def create_zip_file(data, file_format='json'):
         app.logger.error(f'Error creating zip file: {str(e)}')
         raise
 
-def process_data_in_chunks(url, variables, start_datetime, end_datetime):
+def process_data_in_chunks(url, variables, start_datetime, end_datetime, interval_minutes):
     chunk_size = datetime.timedelta(days=7)
     current_start = start_datetime
     all_data = []
@@ -59,23 +45,23 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime):
     while current_start < end_datetime:
         current_end = min(current_start + chunk_size, end_datetime)
         # Usar step de 1 minuto
-        chunk_data = get_data(url, variables, current_start, current_end, '1m', interval_minutes=60)
+        chunk_data = get_data(url, variables, current_start, current_end, '1m', interval_minutes=interval_minutes)
 
         # Aplicar promedio horario al chunk
-#        chunk_data['date'] = pd.to_datetime(chunk_data['date'], utc=True) - pd.Timedelta(hours=1)
         chunk_data['date'] = pd.to_datetime(chunk_data['date'], utc=True)
         chunk_data.set_index(['station', 'date'], inplace=True)
         chunk_data = chunk_data.apply(pd.to_numeric, errors='coerce')
 
-        hourly_chunks = []
+        interval_chunks = []
         for station, group in chunk_data.groupby('station'):
-            # Resamplear a intervalos horarios y calcular promedio
-            hourly_data = group.resample('1h', level='date').mean()
-            hourly_data.index = hourly_data.index + pd.Timedelta(hours=1)
-            hourly_data['station'] = station
-            hourly_chunks.append(hourly_data.reset_index())
+            # Resamplear a intervalos configurables y calcular promedio
+            interval_str = f'{interval_minutes}T'
+            interval_data = group.resample(interval_str, level='date').mean()
+            interval_data.index = interval_data.index + pd.Timedelta(minutes=interval_minutes)
+            interval_data['station'] = station
+            interval_chunks.append(interval_data.reset_index())
 
-        chunk_data = pd.concat(hourly_chunks, ignore_index=True)
+        chunk_data = pd.concat(interval_chunks, ignore_index=True)
         all_data.append(chunk_data)
 
         current_start = current_end
@@ -90,16 +76,16 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime):
     return all_data
 
 # Get data from API with time intervals
-def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes=60):
+def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_minutes):
     all_results = []
     current_start_time = start_datetime
 
     while current_start_time < end_datetime:
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
-        current_start_time_1s = current_start_time + pd.Timedelta(seconds=1)
-        query_url = f"{url}&start={current_start_time_1s.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
+        current_end_time_1s = current_end_time - pd.Timedelta(seconds=1)
+        query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time_1s.isoformat()}Z&step={step}"
 
-        app.logger.debug(f"Querying data from {current_start_time_1s} to {current_end_time}")
+        app.logger.debug(f"Querying data from {current_start_time} to {current_end_time_1s}")
         app.logger.debug(f"url: {query_url}")
 
         try:
@@ -164,9 +150,11 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
                 if col in df_result.columns:
                     df_result[col] = df_result[col].astype(float)
             if 'Latitude' in df_result.columns:
-                df_result['Latitude'].replace(0, np.nan, inplace=True)
+#                df_result['Latitude'].replace(0, np.nan, inplace=True)
+                df_result['Latitude'] = df_result['Latitude'].replace(0, np.nan)
             if 'Longitude' in df_result.columns:
-                df_result['Longitude'].replace(0, np.nan, inplace=True)
+#                df_result['Longitude'].replace(0, np.nan, inplace=True)
+                df_result['Longitude'] = df_result['Longitude'].replace(0, np.nan)
 
 #            app.logger.debug(f"Dataframe shape after processing and cleaning: {df_result.shape}")
             all_results.append(df_result)
@@ -216,6 +204,7 @@ def index():
     end_date = request.args.get('end_date', '2024-05-09')
     end_time = request.args.get('end_time', '10:00')
     station_filter = request.args.get('station_filter', '')
+    interval_minutes = request.args.get('interval_minutes', 60)
 
     return render_template_string('''
         <form action="/dataresult" method="post">
@@ -231,16 +220,13 @@ def index():
             <label for="start_date">Start date/time:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
             <label for="start_time"> / </label>
-            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="3600" list="hour-markers"><br><br>
+            <input type="time" id="start_time" name="start_time" value="{{ start_time }}" step="60"><br><br>
             <label for="end_date">End date/time:</label>
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
             <label for="end_time"> / </label>
-            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="3600" list="hour-markers"><br><br>
-            <datalist id="hour-markers">
-                {% for hour in range(24) %}
-                    <option value="{{ '%02d:00'|format(hour) }}"></option>
-                {% endfor %}
-            </datalist>
+            <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="60"><br><br>
+            <label for="interval_minutes">Interval (minutes):</label>
+            <input type="number" id="interval_minutes" name="interval_minutes" value="{{ interval_minutes }}" min="5"><br><br>
             <label for="station_filter">Station Filter:</label>
             <input type="text" id="station_filter" name="station_filter" value=""><br><br>
 
@@ -248,7 +234,6 @@ def index():
             <select id="result_format" name="result_format">
                 <option value="screen">Result in screen</option>
                 <option value="filejson">Result in json ZIP file</option>
-                <option value="filecsv">Result in csv ZIP file</option>
             </select><br><br>
 
             <input type="submit" value="Submit">
@@ -262,7 +247,7 @@ def index():
             }
         </script>
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date,
-       start_time=start_time, end_date=end_date, end_time=end_time)
+       start_time=start_time, end_date=end_date, end_time=end_time, interval_minutes=interval_minutes)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -278,10 +263,12 @@ def data():
         end_date = request.form['end_date']
         end_time = request.form['end_time']
         station_filter = request.form.get('station_filter', '')
+        interval_minutes = int(request.form.get('interval_minutes', 60))
         result_format = request.form.get('result_format', 'screen')
 
-        # Se elimina la resta de una hora
-        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}") - datetime.timedelta(minutes=60)
+        if interval_minutes < 5:
+            return jsonify({'error': 'Interval must be at least 5 minutes'})
+        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
 
@@ -298,7 +285,7 @@ def data():
         # Process data
         if date_diff.days > 7:
             all_data = []
-            for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime):
+            for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, interval_minutes):
                 if station_filter:
                     filters = station_filter.split(',')
                     chunk_data = chunk_data[chunk_data['station'].str.contains('|'.join(filters), case=False)]
@@ -306,21 +293,21 @@ def data():
             obs = pd.concat(all_data, ignore_index=True)
         else:
             # Obtener datos y redondear a 3 decimales todas las columnas numéricas
-            obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m')
+            obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m', interval_minutes=interval_minutes)
 
             # Apply hourly average
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
             obs = obs.apply(pd.to_numeric, errors='coerce')
 
-            hourly_obs = []
+            averaged_data = []
             for station, group in obs.groupby('station'):
-                hourly_data = group.resample('1h', level='date').mean()
-                hourly_data.index = hourly_data.index + pd.Timedelta(hours=1)
-                hourly_data['station'] = station
-                hourly_obs.append(hourly_data.reset_index())
+                averaged = group.resample(f'{interval_minutes}min', level='date').mean()
+                averaged['station'] = station
+                averaged.reset_index(inplace=True)
+                averaged_data.append(averaged)
 
-            obs = pd.concat(hourly_obs, ignore_index=True)
+            obs = pd.concat(averaged_data, ignore_index=True)
 
             if station_filter:
                 filters = station_filter.split(',')
@@ -371,7 +358,7 @@ def data():
         else:
             # Crear y enviar archivo
             try:
-                memory_file = create_zip_file(result_data, 'json' if result_format == 'filejson' else 'csv')
+                memory_file = create_zip_file(result_data, 'json')
 
                 timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
                 filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
@@ -394,4 +381,4 @@ def data():
         return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8081)
+    app.run(debug=True, host='0.0.0.0', port=8082)
