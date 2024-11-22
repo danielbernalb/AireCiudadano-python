@@ -43,7 +43,7 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=8, center_lat=None, center_lon=None):
+def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=12, center_lat=None, center_lon=None):
 
     if center_lat is not None and center_lon is not None:
         center = [center_lon, center_lat]
@@ -59,19 +59,37 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
             df["Longitude"].min() - 0.1, df["Longitude"].max() + 0.1,
             df["Latitude"].min() - 0.1, df["Latitude"].max() + 0.1
         ]
+
+    # Diccionario de fuentes de mosaicos
+    tile_sources = {
+        'osm': ctx.providers.OpenStreetMap.Mapnik,
+        'cartodb': ctx.providers.CartoDB.Positron,
+        'cartodb_dark': ctx.providers.CartoDB.DarkMatter,
+        'satellite': ctx.providers.Esri.WorldImagery,
+    }
+
+    if map_style not in tile_sources:
+        map_style = 'osm'  # default map style
+
+    tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
+
+    app.logger.debug(f"Tile source selected: {tile_source}")
     
-    fig = plt.figure(figsize=(12, 10), dpi=200)
+    fig = plt.figure(figsize=(16, 12), dpi=300)  # Aumentar tamaño y DPI
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
-    
-    ctx.add_basemap(
-        ax,
-#        source="https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png",
-        source=ctx.providers.OpenStreetMap.Mapnik, 
-        crs=ccrs.PlateCarree(),
-        zoom=zoom
-    )
-    
+
+    try:
+        ctx.add_basemap(
+            ax,
+            source=tile_source,
+            crs=ccrs.PlateCarree(),
+            zoom=zoom
+        )
+    except Exception as e:
+        app.logger.error(f"Error adding basemap: {e}")
+        raise
+
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
     
@@ -127,7 +145,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         else:
             update(total_frames - 1)
 
-    ani = FuncAnimation(fig, extended_update, frames=total_frames_with_extra, repeat=False)
+    ani = FuncAnimation(fig, extended_update, frames=total_frames_with_extra, repeat=False, blit=False)
     
     writer = FFMpegWriter(fps=fps, metadata=dict(artist='Me'), bitrate=1800)
     ani.save(output_path, writer=writer)
@@ -190,12 +208,13 @@ def getdata():
             <label for="map_style">Estilo de mapa:</label><br>
             <select id="map_style" name="map_style">
                 <option value="osm">OpenStreetMap</option>
-                <option value="satellite">Satellite</option>
-                <option value="cartodb">CartoDB</option>
+                <option value="cartodb">CartoDB Positron (Claro)</option>
+                <option value="cartodb_dark">CartoDB Dark Matter (Oscuro)</option>
+                <option value="satellite">Esri Satélite</option>
             </select><br><br>
             
-            <label for="zoom">Nivel de zoom:</label><br>
-            <input type="number" id="zoom" name="zoom" value="8" min="1" max="18" required><br><br>
+            <label for="zoom">Nivel de zoom (1-18):</label><br>
+            <input type="number" id="zoom" name="zoom" value="12" min="1" max="18" required><br><br>
             
             <label for="center_lat">Latitud central:</label><br>
             <input type="number" id="center_lat" name="center_lat" step="0.0001" required><br><br>
