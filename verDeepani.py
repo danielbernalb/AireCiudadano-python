@@ -78,9 +78,10 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.02)
     
     scatter = ax.scatter(
-        [], [], s=70 * size_scale, c=[], transform=ccrs.PlateCarree(),
-        alpha=1.0, edgecolor='none'  # Removed borders for solid fill
+        [], [], s=70 * size_scale, transform=ccrs.PlateCarree(),
+        alpha=1.0, linewidths=0.8  # Bordes dinámicos y ancho ajustado
     )
+
     legend_colors = {
         "green": "0-12 μg/m³ (Bueno)",
         "yellow": "13-34 μg/m³ (Moderado)",
@@ -107,10 +108,13 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         data_frame = df[df['date'] == current_time]
         data_frame = data_frame[data_frame['InOut'] == 0.0]
         
+        # Colores según la escala de PM2.5
         colors = data_frame["PM25"].apply(pm25_to_color)
         
+        # Actualizar coordenadas, color del relleno y color del borde
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
-        scatter.set_facecolor(colors)  # Only set facecolor for solid fill
+        scatter.set_facecolor(colors)  # Color de relleno
+        scatter.set_edgecolor(colors)  # Color del borde
         ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=20)
     
     total_frames = len(df['date'].unique())
