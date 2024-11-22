@@ -19,7 +19,6 @@ OUTPUT_FOLDER = "output"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# Escala de colores basada en PM25
 def pm25_to_color(pm25):
     if pm25 < 13:
         return "green"
@@ -34,7 +33,6 @@ def pm25_to_color(pm25):
     else:
         return "brown"
 
-# Crear DataFrame consolidado para animación
 def create_dataframe(json_data):
     records = []
     for station, entries in json_data.items():
@@ -45,10 +43,8 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-# Crear mapa de animación con Cartopy
-# Crear mapa de animación con Cartopy
 def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=8, center_lat=None, center_lon=None):
-    # Determine map extent based on user input or data
+
     if center_lat is not None and center_lon is not None:
         center = [center_lon, center_lat]
         resolution = 360 / (2 ** zoom)
@@ -64,15 +60,14 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
             df["Latitude"].min() - 0.1, df["Latitude"].max() + 0.1
         ]
     
-    # Configuración del mapa con Cartopy
-    fig = plt.figure(figsize=(12, 10), dpi=200)  # Tamaño más ajustado
+    fig = plt.figure(figsize=(12, 10), dpi=200)
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
     
-    # Add basemap using contextily with a gray background
     ctx.add_basemap(
         ax,
-        source="https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png",
+#        source="https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png",
+        source=ctx.providers.OpenStreetMap.Mapnik, 
         crs=ccrs.PlateCarree(),
         zoom=zoom
     )
@@ -80,15 +75,12 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
     
-    # Ajustar márgenes para minimizar espacio blanco
     plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.02)
     
-    # Preparar los puntos sólidos
     scatter = ax.scatter(
-        [], [], s=70, c=[], transform=ccrs.PlateCarree(), alpha=1.0, edgecolors='none'  # Puntos sólidos
+        [], [], s=70 * size_scale, c=[], transform=ccrs.PlateCarree(),
+        alpha=1.0, edgecolor='none'  # Removed borders for solid fill
     )
-    
-    # Leyenda de colores en la esquina inferior izquierda
     legend_colors = {
         "green": "0-12 μg/m³ (Bueno)",
         "yellow": "13-34 μg/m³ (Moderado)",
@@ -98,12 +90,12 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         "brown": "250+ μg/m³ (Peligroso)"
     }
     for color, label in legend_colors.items():
-        ax.scatter([], [], color=color, label=label, s=180, alpha=1.0)  # Tamaño aumentado
+        ax.scatter([], [], color=color, label=label, s=180, alpha=1.0)
     ax.legend(
         title="Niveles PM2.5",
         loc="lower left",
-        fontsize=12,       # Texto más grande
-        title_fontsize=14, # Título más grande
+        fontsize=12,
+        title_fontsize=14,
         frameon=True,
         facecolor="white",
         edgecolor="black"
@@ -114,22 +106,22 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         current_time = sorted(df['date'].unique())[frame]
         data_frame = df[df['date'] == current_time]
         data_frame = data_frame[data_frame['InOut'] == 0.0]
+        
         colors = data_frame["PM25"].apply(pm25_to_color)
+        
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
-        scatter.set_facecolor(colors)  # Asegurar colores sólidos
-        ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=20)  # Título más grande
+        scatter.set_facecolor(colors)  # Only set facecolor for solid fill
+        ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=20)
     
     total_frames = len(df['date'].unique())
-    
-    # Configuración para tiempo adicional en la última frame
-    extra_time_frames = fps * 2  # Tiempo adicional de 2 segundos
+    extra_time_frames = int(max(2 / fps, 2))  # Ajustar frames adicionales
     total_frames_with_extra = total_frames + extra_time_frames
 
     def extended_update(frame):
         if frame < total_frames:
             update(frame)
         else:
-            update(total_frames - 1)  # Repite la última frame
+            update(total_frames - 1)
 
     ani = FuncAnimation(fig, extended_update, frames=total_frames_with_extra, repeat=False)
     
@@ -140,7 +132,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
 def getdata():
     if request.method == 'POST':
         file = request.files.get('file')
-        fps = request.form.get('fps', 2, type=int)
+        fps = request.form.get('fps', 2, type=float)  # FPS ahora es float
         size_scale = request.form.get('size_scale', 2, type=int)
         map_style = request.form.get('map_style', 'osm')
         zoom = request.form.get('zoom', 8, type=int)
@@ -186,10 +178,10 @@ def getdata():
             <input type="file" id="file" name="file" accept=".json" required><br><br>
             
             <label for="fps">Velocidad de animación (FPS):</label><br>
-            <input type="number" id="fps" name="fps" value="2" min="1" max="60" required><br><br>
+            <input type="number" id="fps" name="fps" value="2" step="0.1" min="0.1" max="60" required><br><br>
             
             <label for="size_scale">Tamaño de puntos (escala):</label><br>
-            <input type="number" id="size_scale" name="size_scale" value="2" min="1" max="10" required><br><br>
+            <input type="number" id="size_scale" name="size_scale" value="2" min="1" max="100" required><br><br>
             
             <label for="map_style">Estilo de mapa:</label><br>
             <select id="map_style" name="map_style">
@@ -207,11 +199,11 @@ def getdata():
             <label for="center_lon">Longitud central:</label><br>
             <input type="number" id="center_lon" name="center_lon" step="0.0001" required><br><br>
             
-            <button type="submit">Subir y Configurar</button>
+            <button type="submit">Subir archivo y generar animación</button>
         </form>
     </body>
     </html>
     ''')
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=8084)
