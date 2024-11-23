@@ -1,3 +1,4 @@
+import subprocess  # Importar para usar FFmpeg
 from flask import Flask, request, render_template_string, jsonify, send_file
 import os
 import json
@@ -19,6 +20,34 @@ OUTPUT_FOLDER = "output"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
+# Función para convertir el video con FFmpeg
+def convert_video_to_android_compatible(input_path, output_path):
+    """
+    Convierte un video MP4 a un formato compatible con WhatsApp Android.
+    """
+    try:
+        # Comando FFmpeg para asegurar compatibilidad con WhatsApp
+        subprocess.run([
+            "ffmpeg", "-y",  # Sobrescribe el archivo de salida
+            "-i", input_path,  # Archivo de entrada
+            "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease",  # Escala a 1280x720 o menos
+            "-c:v", "libx264",  # Codec de video H.264
+            "-profile:v", "baseline",  # Perfil baseline para compatibilidad
+            "-level", "3.0",  # Nivel de compatibilidad
+            "-pix_fmt", "yuv420p",  # Formato de píxel compatible
+            "-b:v", "1500k",  # Tasa de bits
+            "-movflags", "+faststart",  # Optimiza para streaming
+            "-c:a", "aac",  # Codec de audio AAC
+            "-b:a", "128k",  # Tasa de bits de audio
+            "-ar", "44100",  # Frecuencia de muestreo de audio
+            "-shortest",  # Asegura que la duración sea igual al video más corto
+            output_path
+        ], check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        app.logger.error(f"FFmpeg error: {e}")
+        return False
+    
 def pm25_to_color(pm25):
     if pm25 < 13:
         return "green"
@@ -143,7 +172,7 @@ def getdata():
         size_scale = request.form.get('size_scale', 2, type=int)
         map_style = request.form.get('map_style', 'osm')
         zoom = request.form.get('zoom', 10.5, type=float)
-        zoom_base = request.form.get('zoom_base', 12, type=float)  # Nuevo nivel de zoom base
+        zoom_base = request.form.get('zoom_base', 12, type=float)
         center_lat = request.form.get('center_lat', 4.6257, type=float)
         center_lon = request.form.get('center_lon', -74.1340, type=float)
 
@@ -154,21 +183,29 @@ def getdata():
         
         save_path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(save_path)
-        
+
         with open(save_path, 'r') as f:
             json_data = json.load(f)
         df = create_dataframe(json_data["data"])
         
         output_file = os.path.join(OUTPUT_FOLDER, "pm25_animation.mp4")
+        compatible_output_file = os.path.join(OUTPUT_FOLDER, "pm25_animation_android.mp4")
+
         try:
             create_animation(df, output_file, fps=fps, size_scale=size_scale,
                              map_style=map_style, zoom=zoom, zoom_base=zoom_base,
                              center_lat=center_lat, center_lon=center_lon)
+            
+            # Convertir el video generado a un formato compatible con Android y WhatsApp
+            if not convert_video_to_android_compatible(output_file, compatible_output_file):
+                return jsonify({"error": "Error converting video for Android compatibility"})
+            
         except Exception as e:
             return jsonify({"error": f"Error generating animation: {e}"})
         
-        return send_file(output_file, as_attachment=True)
-    
+        # Retorna el archivo convertido
+        return send_file(compatible_output_file, as_attachment=True)
+
     return render_template_string('''
     <!DOCTYPE html>
     <html lang="en">
