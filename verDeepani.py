@@ -43,24 +43,16 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=12, center_lat=None, center_lon=None):
+def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=10.5, zoom_base=10.5, center_lat=4.6257, center_lon=-74.1340):
+    center = [center_lon, center_lat]
+    resolution = 360 / (2 ** int(zoom))
+    half_size_lon = 0.5 * resolution
+    half_size_lat = 0.5 * resolution
+    extent = [
+        center[0] - half_size_lon, center[0] + half_size_lon,
+        center[1] - half_size_lat, center[1] + half_size_lat
+    ]
 
-    if center_lat is not None and center_lon is not None:
-        center = [center_lon, center_lat]
-        resolution = 360 / (2 ** zoom)
-        half_size_lon = 0.5 * resolution
-        half_size_lat = 0.5 * resolution
-        extent = [
-            center[0] - half_size_lon, center[0] + half_size_lon,
-            center[1] - half_size_lat, center[1] + half_size_lat
-        ]
-    else:
-        extent = [
-            df["Longitude"].min() - 0.1, df["Longitude"].max() + 0.1,
-            df["Latitude"].min() - 0.1, df["Latitude"].max() + 0.1
-        ]
-
-    # Diccionario de fuentes de mosaicos
     tile_sources = {
         'osm': ctx.providers.OpenStreetMap.Mapnik,
         'cartodb': ctx.providers.CartoDB.Positron,
@@ -68,23 +60,19 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         'satellite': ctx.providers.Esri.WorldImagery,
     }
 
-    if map_style not in tile_sources:
-        map_style = 'osm'  # default map style
-
     tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
 
-    app.logger.debug(f"Tile source selected: {tile_source}")
-    
-    fig = plt.figure(figsize=(16, 12), dpi=300)  # Aumentar tamaño y DPI
+    fig = plt.figure(figsize=(16, 12), dpi=300)
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
     try:
+        # El zoom_base se utiliza exclusivamente para el mapa base
         ctx.add_basemap(
             ax,
             source=tile_source,
             crs=ccrs.PlateCarree(),
-            zoom=zoom
+            zoom=zoom_base
         )
     except Exception as e:
         app.logger.error(f"Error adding basemap: {e}")
@@ -92,12 +80,12 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
 
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
-    
+
     plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.02)
-    
+
     scatter = ax.scatter(
         [], [], s=70 * size_scale, transform=ccrs.PlateCarree(),
-        alpha=1.0, linewidths=0.8  # Bordes dinámicos y ancho ajustado
+        alpha=1.0, linewidths=0.8
     )
 
     legend_colors = {
@@ -119,24 +107,21 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         facecolor="white",
         edgecolor="black"
     )
-    
-    # Función de actualización por frame
+
     def update(frame):
         current_time = sorted(df['date'].unique())[frame]
         data_frame = df[df['date'] == current_time]
         data_frame = data_frame[data_frame['InOut'] == 0.0]
         
-        # Colores según la escala de PM2.5
         colors = data_frame["PM25"].apply(pm25_to_color)
         
-        # Actualizar coordenadas, color del relleno y color del borde
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
-        scatter.set_facecolor(colors)  # Color de relleno
-        scatter.set_edgecolor(colors)  # Color del borde
+        scatter.set_facecolor(colors)
+        scatter.set_edgecolor(colors)
         ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=20)
     
     total_frames = len(df['date'].unique())
-    extra_time_frames = int(max(2 / fps, 2))  # Ajustar frames adicionales
+    extra_time_frames = int(max(2 / fps, 2))
     total_frames_with_extra = total_frames + extra_time_frames
 
     def extended_update(frame):
@@ -154,19 +139,18 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
 def getdata():
     if request.method == 'POST':
         file = request.files.get('file')
-        fps = request.form.get('fps', 2, type=float)  # FPS ahora es float
+        fps = request.form.get('fps', 2, type=float)
         size_scale = request.form.get('size_scale', 2, type=int)
         map_style = request.form.get('map_style', 'osm')
-        zoom = request.form.get('zoom', 8, type=int)
-        center_lat = request.form.get('center_lat', type=float)
-        center_lon = request.form.get('center_lon', type=float)
-        
+        zoom = request.form.get('zoom', 10.5, type=float)
+        zoom_base = request.form.get('zoom_base', 12, type=float)  # Nuevo nivel de zoom base
+        center_lat = request.form.get('center_lat', 4.6257, type=float)
+        center_lon = request.form.get('center_lon', -74.1340, type=float)
+
         if not file:
             return jsonify({"error": "No file uploaded"})
         if not file.filename.endswith('.json'):
             return jsonify({"error": "Only JSON files are allowed"})
-        if center_lat is None or center_lon is None:
-            return jsonify({"error": "Invalid coordinates"})
         
         save_path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(save_path)
@@ -178,7 +162,7 @@ def getdata():
         output_file = os.path.join(OUTPUT_FOLDER, "pm25_animation.mp4")
         try:
             create_animation(df, output_file, fps=fps, size_scale=size_scale,
-                             map_style=map_style, zoom=zoom,
+                             map_style=map_style, zoom=zoom, zoom_base=zoom_base,
                              center_lat=center_lat, center_lon=center_lon)
         except Exception as e:
             return jsonify({"error": f"Error generating animation: {e}"})
@@ -213,14 +197,17 @@ def getdata():
                 <option value="satellite">Esri Satélite</option>
             </select><br><br>
             
-            <label for="zoom">Nivel de zoom (1-18):</label><br>
-            <input type="number" id="zoom" name="zoom" value="12" min="1" max="18" required><br><br>
+            <label for="zoom">Nivel de zoom general (1-18, decimales permitidos):</label><br>
+            <input type="number" id="zoom" name="zoom" value="11" step="0.1" min="1" max="18" required><br><br>
             
-            <label for="center_lat">Latitud central:</label><br>
-            <input type="number" id="center_lat" name="center_lat" step="0.0001" required><br><br>
+            <label for="zoom_base">Nivel de zoom del mapa base (1-18):</label><br>
+            <input type="number" id="zoom_base" name="zoom_base" value="12" min="1" max="18" required><br><br>
             
-            <label for="center_lon">Longitud central:</label><br>
-            <input type="number" id="center_lon" name="center_lon" step="0.0001" required><br><br>
+            <label for="center_lat">Latitud central (Por defecto: Bogotá):</label><br>
+            <input type="number" id="center_lat" name="center_lat" value="4.6257" step="0.0001" required><br><br>
+            
+            <label for="center_lon">Longitud central (Por defecto: Bogotá):</label><br>
+            <input type="number" id="center_lon" name="center_lon" value="-74.1340" step="0.0001" required><br><br>
             
             <button type="submit">Subir archivo y generar animación</button>
         </form>
