@@ -124,7 +124,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     bold_font = font_manager.FontProperties(weight="bold", size=12)
     bold_title_font = font_manager.FontProperties(weight="bold", size=15)
     legend = ax.legend(
-        title="Niveles PM2.5",
+        title="Niveles PM2.5 (μg/m³)",
         loc="lower left",
         frameon=True,
         facecolor="white",
