@@ -130,11 +130,12 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     ax.legend(
         title="Niveles PM2.5",
         loc="lower left",
-        fontsize=12,
-        title_fontsize=14,
+        fontsize=15,  # Tamaño de fuente de los elementos
+        title_fontsize=18,  # Tamaño del título de la leyenda
         frameon=True,
         facecolor="white",
-        edgecolor="black"
+        edgecolor="black",
+        markerscale=1.25  # Aumenta un 25% el tamaño de los íconos de la leyenda
     )
 
     def update(frame):
@@ -147,7 +148,8 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
         scatter.set_facecolor(colors)
         scatter.set_edgecolor(colors)
-        ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=20)
+        # Para modificar titulo del video:
+        ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=24, fontweight="bold")
     
     total_frames = len(df['date'].unique())
     extra_time_frames = int(max(2 / fps, 2))
