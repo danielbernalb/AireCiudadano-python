@@ -5,7 +5,6 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from matplotlib import font_manager
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -31,12 +30,12 @@ def convert_video_to_android_compatible(input_path, output_path):
         subprocess.run([
             "ffmpeg", "-y",  # Sobrescribe el archivo de salida
             "-i", input_path,  # Archivo de entrada
-            "-vf", "scale=w=3840:h=2160:force_original_aspect_ratio=decrease",  # Escala a 4K (3840x2160)
+            "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease",  # Escala a 1280x720 o menos
             "-c:v", "libx264",  # Codec de video H.264
             "-profile:v", "baseline",  # Perfil baseline para compatibilidad
             "-level", "3.0",  # Nivel de compatibilidad
             "-pix_fmt", "yuv420p",  # Formato de píxel compatible
-            "-b:v", "3000k",  # Tasa de bits
+            "-b:v", "1500k",  # Tasa de bits
             "-movflags", "+faststart",  # Optimiza para streaming
             "-c:a", "aac",  # Codec de audio AAC
             "-b:a", "128k",  # Tasa de bits de audio
@@ -119,29 +118,25 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     )
 
     legend_colors = {
-        "green": "0-12 (Bueno)",
-        "yellow": "13-34 (Moderado)",
-        "orange": "35-54 (Dañino grupos sensibles)",
-        "red": "55-149 (Dañino)",
-        "purple": "150-249 (Muy daniño)",
-        "brown": "250+ (Peligroso)"
+        "green": "0-12 μg/m³ (Bueno)",
+        "yellow": "13-34 μg/m³ (Moderado)",
+        "orange": "35-54 μg/m³ (Dañino grupos sensibles)",
+        "red": "55-149 μg/m³ (Dañino)",
+        "purple": "150-249 μg/m³ (Muy daniño)",
+        "brown": "250+ μg/m³ (Peligroso)"
     }
     for color, label in legend_colors.items():
         ax.scatter([], [], color=color, label=label, s=180, alpha=1.0)
-
-    # Define fuentes para el título y los textos de la leyenda
-    bold_font = font_manager.FontProperties(weight="bold", size=15)  # Negrilla para los textos
-    bold_title_font = font_manager.FontProperties(weight="bold", size=18)  # Negrilla para el título
-
     ax.legend(
         title="Niveles PM2.5",
         loc="lower left",
+        fontsize=15,  # Tamaño de fuente de los elementos
+        title_fontsize=18,  # Tamaño del título de la leyenda
         frameon=True,
         facecolor="white",
         edgecolor="black",
-        markerscale=1.25,  # Aumenta tamaño de íconos
-        prop=bold_font  # Aplica negrilla a los textos
-    ).get_title().set_fontproperties(bold_title_font)  # Aplica negrilla y tamaño al título
+        markerscale=1.25  # Aumenta un 25% el tamaño de los íconos de la leyenda
+    )
 
     def update(frame):
         current_time = sorted(df['date'].unique())[frame]
@@ -154,7 +149,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         scatter.set_facecolor(colors)
         scatter.set_edgecolor(colors)
         # Para modificar titulo del video:
-        ax.set_title(f"Red AireCiudadano - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=24, fontweight="bold")
+        ax.set_title(f"PM2.5 - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=24, fontweight="bold")
     
     total_frames = len(df['date'].unique())
     extra_time_frames = int(max(2 / fps, 2))
@@ -242,16 +237,16 @@ def getdata():
             </select><br><br>
             
             <label for="zoom">Nivel de zoom general (1-18, decimales permitidos):</label><br>
-            <input type="number" id="zoom" name="zoom" value="10.7" step="0.1" min="1" max="18" required><br><br>
+            <input type="number" id="zoom" name="zoom" value="11" step="0.1" min="1" max="18" required><br><br>
             
             <label for="zoom_base">Nivel de zoom del mapa base (1-18):</label><br>
             <input type="number" id="zoom_base" name="zoom_base" value="12" min="1" max="18" required><br><br>
             
             <label for="center_lat">Latitud central (Por defecto: Bogotá):</label><br>
-            <input type="number" id="center_lat" name="center_lat" value="4.62" step="0.0001" required><br><br>
+            <input type="number" id="center_lat" name="center_lat" value="4.6257" step="0.0001" required><br><br>
             
             <label for="center_lon">Longitud central (Por defecto: Bogotá):</label><br>
-            <input type="number" id="center_lon" name="center_lon" value="-74.15" step="0.0001" required><br><br>
+            <input type="number" id="center_lon" name="center_lon" value="-74.1340" step="0.0001" required><br><br>
             
             <button type="submit">Subir archivo y generar animación</button>
         </form>
