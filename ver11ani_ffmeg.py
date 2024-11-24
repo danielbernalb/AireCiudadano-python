@@ -73,9 +73,9 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=10.5, zoom_base=10.5, center_lat=4.6257, center_lon=-74.1340):
+def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=10, zoom_base=12, center_lat=4.6257, center_lon=-74.1340):
     center = [center_lon, center_lat]
-    resolution = 360 / (2 ** int(zoom))
+    resolution = 360 / (2 ** zoom)
     half_size_lon = 0.5 * resolution
     half_size_lat = 0.5 * resolution
     extent = [
@@ -92,26 +92,18 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
 
     tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
 
-    fig = plt.figure(figsize=(16, 12), dpi=300)
+    # Figura con relación de aspecto 1:1
+    fig = plt.figure(figsize=(10, 10), dpi=300)
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    try:
-        # El zoom_base se utiliza exclusivamente para el mapa base
-        ctx.add_basemap(
-            ax,
-            source=tile_source,
-            crs=ccrs.PlateCarree(),
-            zoom=zoom_base
-        )
-    except Exception as e:
-        app.logger.error(f"Error adding basemap: {e}")
-        raise
+    ctx.add_basemap(ax, source=tile_source, crs=ccrs.PlateCarree(), zoom=zoom_base)
 
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
 
-    plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.02)
+    # Ajustar márgenes: reduce márgenes laterales
+    plt.subplots_adjust(left=0.02, right=0.99, top=0.95, bottom=0.02)
 
     scatter = ax.scatter(
         [], [], s=70 * size_scale, transform=ccrs.PlateCarree(),
@@ -129,33 +121,31 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
     for color, label in legend_colors.items():
         ax.scatter([], [], color=color, label=label, s=180, alpha=1.0)
 
-    # Define fuentes para el título y los textos de la leyenda
-    bold_font = font_manager.FontProperties(weight="bold", size=15)  # Negrilla para los textos
-    bold_title_font = font_manager.FontProperties(weight="bold", size=18)  # Negrilla para el título
-
-    ax.legend(
+    bold_font = font_manager.FontProperties(weight="bold", size=12)
+    bold_title_font = font_manager.FontProperties(weight="bold", size=15)
+    legend = ax.legend(
         title="Niveles PM2.5",
         loc="lower left",
         frameon=True,
         facecolor="white",
         edgecolor="black",
-        markerscale=1.25,  # Aumenta tamaño de íconos
-        prop=bold_font  # Aplica negrilla a los textos
-    ).get_title().set_fontproperties(bold_title_font)  # Aplica negrilla y tamaño al título
+        markerscale=1.1,  # Aumenta tamaño de íconos
+        prop=bold_font
+    )
+    legend.get_title().set_fontproperties(bold_title_font)
 
+    # Función de actualización de los frames
     def update(frame):
         current_time = sorted(df['date'].unique())[frame]
         data_frame = df[df['date'] == current_time]
         data_frame = data_frame[data_frame['InOut'] == 0.0]
         
         colors = data_frame["PM25"].apply(pm25_to_color)
-        
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
         scatter.set_facecolor(colors)
         scatter.set_edgecolor(colors)
-        # Para modificar titulo del video:
         ax.set_title(f"Red AireCiudadano - {current_time.strftime('%Y-%m-%d %H:%M:%S')}", fontsize=24, fontweight="bold")
-    
+
     total_frames = len(df['date'].unique())
     extra_time_frames = int(max(2 / fps, 2))
     total_frames_with_extra = total_frames + extra_time_frames
@@ -167,7 +157,6 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
             update(total_frames - 1)
 
     ani = FuncAnimation(fig, extended_update, frames=total_frames_with_extra, repeat=False, blit=False)
-    
     writer = FFMpegWriter(fps=fps, metadata=dict(artist='Me'), bitrate=1800)
     ani.save(output_path, writer=writer)
 
@@ -176,12 +165,12 @@ def getdata():
     if request.method == 'POST':
         file = request.files.get('file')
         fps = request.form.get('fps', 2, type=float)
-        size_scale = request.form.get('size_scale', 2, type=int)
+        size_scale = request.form.get('size_scale', 2.0, type=float)
         map_style = request.form.get('map_style', 'osm')
-        zoom = request.form.get('zoom', 10.5, type=float)
-        zoom_base = request.form.get('zoom_base', 12, type=float)
+        zoom = request.form.get('zoom', 10, type=int)
+        zoom_base = request.form.get('zoom_base', 12, type=int)
         center_lat = request.form.get('center_lat', 4.6257, type=float)
-        center_lon = request.form.get('center_lon', -74.1340, type=float)
+        center_lon = request.form.get('center_lon', -74.15, type=float)
 
         if not file:
             return jsonify({"error": "No file uploaded"})
@@ -231,7 +220,7 @@ def getdata():
             <input type="number" id="fps" name="fps" value="2" step="0.1" min="0.1" max="60" required><br><br>
             
             <label for="size_scale">Tamaño de puntos (escala):</label><br>
-            <input type="number" id="size_scale" name="size_scale" value="2" min="1" max="100" required><br><br>
+            <input type="number" id="size_scale" name="size_scale" value="2" step="0.1" min="0.1" max="100" required><br><br>
             
             <label for="map_style">Estilo de mapa:</label><br>
             <select id="map_style" name="map_style">
@@ -241,8 +230,8 @@ def getdata():
                 <option value="satellite">Esri Satélite</option>
             </select><br><br>
             
-            <label for="zoom">Nivel de zoom general (1-18, decimales permitidos):</label><br>
-            <input type="number" id="zoom" name="zoom" value="10.7" step="0.1" min="1" max="18" required><br><br>
+            <label for="zoom">Nivel de zoom general (1-18):</label><br>
+            <input type="number" id="zoom" name="zoom" value="10" min="1" max="18" required><br><br>
             
             <label for="zoom_base">Nivel de zoom del mapa base (1-18):</label><br>
             <input type="number" id="zoom_base" name="zoom_base" value="12" min="1" max="18" required><br><br>
