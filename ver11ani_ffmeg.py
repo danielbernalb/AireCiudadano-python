@@ -1,3 +1,9 @@
+# Agregar opciones como:
+# 1. eliminar sensores con defectos, Va en la API data
+# 2. seleccionar por ubicacion geografica si se puede
+# 3. ajustes a sensores Sensirion SPS30, Plantower, va en la API data
+# 4. resolucion de salida de pantalla: 1-1 4-3 16-9
+
 import subprocess  # Importar para usar FFmpeg
 from flask import Flask, request, render_template_string, jsonify, send_file
 import os
@@ -9,8 +15,6 @@ from matplotlib import font_manager
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from cartopy.io import img_tiles
-import numpy as np
 import contextily as ctx
 
 app = Flask(__name__)
@@ -21,34 +25,29 @@ OUTPUT_FOLDER = "output"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# Función para convertir el video con FFmpeg
 def convert_video_to_android_compatible(input_path, output_path):
-    """
-    Convierte un video MP4 a un formato compatible con WhatsApp Android.
-    """
     try:
-        # Comando FFmpeg para asegurar compatibilidad con WhatsApp
         subprocess.run([
-            "ffmpeg", "-y",  # Sobrescribe el archivo de salida
-            "-i", input_path,  # Archivo de entrada
-            "-vf", "scale=w=3840:h=2160:force_original_aspect_ratio=decrease",  # Escala a 4K (3840x2160)
-            "-c:v", "libx264",  # Codec de video H.264
-            "-profile:v", "baseline",  # Perfil baseline para compatibilidad
-            "-level", "3.0",  # Nivel de compatibilidad
-            "-pix_fmt", "yuv420p",  # Formato de píxel compatible
-            "-b:v", "3000k",  # Tasa de bits
-            "-movflags", "+faststart",  # Optimiza para streaming
-            "-c:a", "aac",  # Codec de audio AAC
-            "-b:a", "128k",  # Tasa de bits de audio
-            "-ar", "44100",  # Frecuencia de muestreo de audio
-            "-shortest",  # Asegura que la duración sea igual al video más corto
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-vf", "scale=w=3840:h=2160:force_original_aspect_ratio=decrease",
+            "-c:v", "libx264",
+            "-profile:v", "baseline",
+            "-level", "3.0",
+            "-pix_fmt", "yuv420p",
+            "-b:v", "3000k",
+            "-movflags", "+faststart",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-ar", "44100",
+            "-shortest",
             output_path
         ], check=True)
         return True
     except subprocess.CalledProcessError as e:
         app.logger.error(f"FFmpeg error: {e}")
         return False
-    
+
 def pm25_to_color(pm25):
     if pm25 < 13:
         return "green"
@@ -73,7 +72,8 @@ def create_dataframe(json_data):
     df['date'] = pd.to_datetime(df['date'])
     return df
 
-def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom=10, zoom_base=12, center_lat=4.6257, center_lon=-74.1340):
+def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alpha=1.0, zoom=10, zoom_base=12,
+                     aspect_ratio='1:1', center_lat=4.6257, center_lon=-74.1340):
     center = [center_lon, center_lat]
     resolution = 360 / (2 ** zoom)
     half_size_lon = 0.5 * resolution
@@ -88,21 +88,29 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         'cartodb': ctx.providers.CartoDB.Positron,
         'cartodb_dark': ctx.providers.CartoDB.DarkMatter,
         'satellite': ctx.providers.Esri.WorldImagery,
+#        'stamen_toner': ctx.providers.Stamen.Toner,
+#        'stamen_terrain': ctx.providers.Stamen.Terrain,
+#        'stamen_watercolor': ctx.providers.Stamen.Watercolor,
     }
 
     tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
 
-    # Figura con relación de aspecto 1:1
+    aspect_ratios = {
+        '1:1': (10, 10),
+        '4:3': (12, 9),
+        '16:9': (16, 9),
+    }
+#    fig_size = aspect_ratios.get(aspect_ratio, (10, 10))
+#    fig = plt.figure(figsize=fig_size, dpi=300)
     fig = plt.figure(figsize=(10, 10), dpi=300)
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    ctx.add_basemap(ax, source=tile_source, crs=ccrs.PlateCarree(), zoom=zoom_base)
+    ctx.add_basemap(ax, source=tile_source, crs=ccrs.PlateCarree(), zoom=zoom_base, alpha=alpha)
 
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
 
-    # Ajustar márgenes: reduce márgenes laterales
     plt.subplots_adjust(left=0.02, right=0.99, top=0.95, bottom=0.02)
 
     scatter = ax.scatter(
@@ -139,7 +147,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', zoom
         current_time = sorted(df['date'].unique())[frame]
         data_frame = df[df['date'] == current_time]
         data_frame = data_frame[data_frame['InOut'] == 0.0]
-        
+
         colors = data_frame["PM25"].apply(pm25_to_color)
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
         scatter.set_facecolor(colors)
@@ -167,6 +175,8 @@ def getdata():
         fps = request.form.get('fps', 2, type=float)
         size_scale = request.form.get('size_scale', 2.0, type=float)
         map_style = request.form.get('map_style', 'osm')
+        alpha = request.form.get('alpha', 1.0, type=float)
+        aspect_ratio = request.form.get('aspect_ratio', '1:1')
         zoom = request.form.get('zoom', 10, type=int)
         zoom_base = request.form.get('zoom_base', 12, type=int)
         center_lat = request.form.get('center_lat', 4.6257, type=float)
@@ -176,30 +186,26 @@ def getdata():
             return jsonify({"error": "No file uploaded"})
         if not file.filename.endswith('.json'):
             return jsonify({"error": "Only JSON files are allowed"})
-        
+
         save_path = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(save_path)
 
         with open(save_path, 'r') as f:
             json_data = json.load(f)
         df = create_dataframe(json_data["data"])
-        
+
         output_file = os.path.join(OUTPUT_FOLDER, "pm25_animation.mp4")
         compatible_output_file = os.path.join(OUTPUT_FOLDER, "pm25_animation_android.mp4")
 
         try:
-            create_animation(df, output_file, fps=fps, size_scale=size_scale,
-                             map_style=map_style, zoom=zoom, zoom_base=zoom_base,
+            create_animation(df, output_file, fps=fps, size_scale=size_scale, map_style=map_style, alpha=alpha,
+                             zoom=zoom, zoom_base=zoom_base, aspect_ratio=aspect_ratio,
                              center_lat=center_lat, center_lon=center_lon)
-            
-            # Convertir el video generado a un formato compatible con Android y WhatsApp
             if not convert_video_to_android_compatible(output_file, compatible_output_file):
                 return jsonify({"error": "Error converting video for Android compatibility"})
-            
         except Exception as e:
             return jsonify({"error": f"Error generating animation: {e}"})
-        
-        # Retorna el archivo convertido
+
         return send_file(compatible_output_file, as_attachment=True)
 
     return render_template_string('''
@@ -229,6 +235,16 @@ def getdata():
                 <option value="cartodb_dark">CartoDB Dark Matter (Oscuro)</option>
                 <option value="satellite">Esri Satélite</option>
             </select><br><br>
+            
+            <label>Aspect Ratio:</label><br>
+            <select name="aspect_ratio">
+                <option value="1:1">1:1</option>
+                <option value="4:3">4:3</option>
+                <option value="16:9">16:9</option>
+            </select><br><br>
+
+            <label>Transparency (Alpha):</label><br>
+            <input type="number" name="alpha" value="1.0" step="0.1" min="0.1" max="1.0"><br><br>
             
             <label for="zoom">Nivel de zoom general (1-18):</label><br>
             <input type="number" id="zoom" name="zoom" value="10" min="1" max="18" required><br><br>
