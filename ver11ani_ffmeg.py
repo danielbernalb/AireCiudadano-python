@@ -1,13 +1,12 @@
 # Agregar opciones como:
 # 1. eliminar sensores con defectos, Va en la API data
-# 2. seleccionar por ubicacion geografica si se puede
 # 3. ajustes a sensores Sensirion SPS30, Plantower, va en la API data
 # 4. resolucion de salida de pantalla: 1-1 4-3 16-9
 
-import subprocess  # Importar para usar FFmpeg
-from flask import Flask, request, render_template_string, jsonify, send_file
 import os
 import json
+import subprocess  # Importar para usar FFmpeg
+from flask import Flask, request, render_template_string, jsonify, send_file
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -30,7 +29,8 @@ def convert_video_to_android_compatible(input_path, output_path):
         subprocess.run([
             "ffmpeg", "-y",
             "-i", input_path,
-            "-vf", "scale=w=3840:h=2160:force_original_aspect_ratio=decrease",
+#            "-vf", "scale=w=3840:h=2160:force_original_aspect_ratio=decrease",
+            "-vf", "scale=-1:1440",  # Scale height to 1440p, width adjusts accordingly
             "-c:v", "libx264",
             "-profile:v", "baseline",
             "-level", "3.0",
@@ -74,6 +74,9 @@ def create_dataframe(json_data):
 
 def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alpha=1.0, zoom=10, zoom_base=12,
                      aspect_ratio='1:1', center_lat=4.6257, center_lon=-74.1340):
+    df = df.sort_values('date')
+    grouped = df.groupby('date')
+    sorted_df_dates = sorted(df['date'].unique())
     center = [center_lon, center_lat]
     resolution = 360 / (2 ** zoom)
     half_size_lon = 0.5 * resolution
@@ -88,9 +91,6 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
         'cartodb': ctx.providers.CartoDB.Positron,
         'cartodb_dark': ctx.providers.CartoDB.DarkMatter,
         'satellite': ctx.providers.Esri.WorldImagery,
-#        'stamen_toner': ctx.providers.Stamen.Toner,
-#        'stamen_terrain': ctx.providers.Stamen.Terrain,
-#        'stamen_watercolor': ctx.providers.Stamen.Watercolor,
     }
 
     tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
@@ -100,11 +100,19 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
         '4:3': (12, 9),
         '16:9': (16, 9),
     }
-#    fig_size = aspect_ratios.get(aspect_ratio, (10, 10))
-#    fig = plt.figure(figsize=fig_size, dpi=300)
-    fig = plt.figure(figsize=(10, 10), dpi=300)
+    fig_size = aspect_ratios.get(aspect_ratio, (10, 10))
+
+    if map_style == 'osm':
+        fig = plt.figure(figsize=(10, 10), dpi=50 if zoom <= 5 else 72 if zoom <= 8 else 120 if zoom <= 11 else 150)
+    else:
+        fig = plt.figure(figsize=(10, 10), dpi=100 if zoom <= 5 else 150 if zoom <= 8 else 200 if zoom <= 11 else 250)
+
+
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+    # Configurar proporción del eje basado en el tamaño de la figura
+    ax.set_aspect(fig_size[0] / fig_size[1])
 
     ctx.add_basemap(ax, source=tile_source, crs=ccrs.PlateCarree(), zoom=zoom_base, alpha=alpha)
 
@@ -114,7 +122,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
     plt.subplots_adjust(left=0.02, right=0.99, top=0.95, bottom=0.02)
 
     scatter = ax.scatter(
-        [], [], s=70 * size_scale, transform=ccrs.PlateCarree(),
+        [], [], s=10 * size_scale, transform=ccrs.PlateCarree(),
         alpha=1.0, linewidths=0.8
     )
 
@@ -144,9 +152,18 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
 
     # Función de actualización de los frames
     def update(frame):
-        current_time = sorted(df['date'].unique())[frame]
-        data_frame = df[df['date'] == current_time]
+        current_time = sorted_df_dates[frame]
+        data_frame = grouped.get_group(current_time)
         data_frame = data_frame[data_frame['InOut'] == 0.0]
+
+        # Spatial filtering based on map extent
+        extent = ax.get_extent()
+        data_frame = data_frame[
+            (data_frame['Longitude'] >= extent[0]) &
+            (data_frame['Longitude'] <= extent[1]) &
+            (data_frame['Latitude'] >= extent[2]) &
+            (data_frame['Latitude'] <= extent[3])
+        ]
 
         colors = data_frame["PM25"].apply(pm25_to_color)
         scatter.set_offsets(data_frame[["Longitude", "Latitude"]])
@@ -173,7 +190,7 @@ def getdata():
     if request.method == 'POST':
         file = request.files.get('file')
         fps = request.form.get('fps', 2, type=float)
-        size_scale = request.form.get('size_scale', 2.0, type=float)
+        size_scale = request.form.get('size_scale', 5, type=int)
         map_style = request.form.get('map_style', 'osm')
         alpha = request.form.get('alpha', 1.0, type=float)
         aspect_ratio = request.form.get('aspect_ratio', '1:1')
@@ -226,7 +243,7 @@ def getdata():
             <input type="number" id="fps" name="fps" value="2" step="0.1" min="0.1" max="60" required><br><br>
             
             <label for="size_scale">Tamaño de puntos (escala):</label><br>
-            <input type="number" id="size_scale" name="size_scale" value="2" step="0.1" min="0.1" max="100" required><br><br>
+            <input type="number" id="size_scale" name="size_scale" value="2" min="1" max="100" required><br><br>
             
             <label for="map_style">Estilo de mapa:</label><br>
             <select id="map_style" name="map_style">
@@ -249,7 +266,7 @@ def getdata():
             <label for="zoom">Nivel de zoom general (1-18):</label><br>
             <input type="number" id="zoom" name="zoom" value="10" min="1" max="18" required><br><br>
             
-            <label for="zoom_base">Nivel de zoom del mapa base (1-18):</label><br>
+            <label for="zoom_base">Nivel zoom mapa base (1-18), recomendado +2 zoom general:</label><br>
             <input type="number" id="zoom_base" name="zoom_base" value="12" min="1" max="18" required><br><br>
             
             <label for="center_lat">Latitud central (Por defecto: Bogotá):</label><br>
