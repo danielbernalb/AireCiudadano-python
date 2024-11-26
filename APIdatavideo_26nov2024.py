@@ -7,7 +7,6 @@ import datetime
 import numpy as np
 import time
 import io
-import zipfile
 import json
 import logging
 
@@ -17,21 +16,6 @@ selected_cols = [
 
 app = Flask(__name__)
 app.logger.setLevel(logging.DEBUG)
-
-def create_zip_file(data, file_format='json'):
-    memory_file = io.BytesIO()
-
-    try:
-        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            data_str = json.dumps(data, indent=2)
-            zf.writestr('data.json', data_str)
-
-        memory_file.seek(0)
-        return memory_file
-
-    except Exception as e:
-        app.logger.error(f'Error creating zip file: {str(e)}')
-        raise
 
 def process_data_in_chunks(url, variables, start_datetime, end_datetime, interval_minutes):
     chunk_size = datetime.timedelta(days=7)
@@ -80,7 +64,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time_1s.isoformat()}Z&step={step}"
 
         app.logger.debug(f"Querying data from {current_start_time} to {current_end_time_1s}")
-        app.logger.debug(f"url: {query_url}")
+#        app.logger.debug(f"url: {query_url}")
 
         try:
             response = requests.get(query_url)
@@ -102,11 +86,11 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
 
             if 'values' in df.columns:
                 df = df.explode('values')
-                df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], datetime.timezone.utc).isoformat())
                 df['value'] = df['values'].apply(lambda x: x[1])
                 df = df.drop(columns="values")
             elif 'value' in df.columns:
-                df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
+                df['date'] = df['value'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], datetime.timezone.utc).isoformat())
                 df['value'] = df['value'].apply(lambda x: x[1])
 
             df = df.rename(columns={"metric.__name__": "metric_name", "metric.exported_job": "station"})
@@ -187,7 +171,7 @@ def index():
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <h2>API AIRECIUDADANO v1.0</h2>
+            <h2>API AIRECIUDADANO video</h2>
             <h3>Instructions at: <a href="https://aireciudadano.com/apidata/" target="_blank">aireciudadano.com/apidata</a></h3><br>
             <label for="variables">Select variables:</label><br>
             <br>
@@ -208,13 +192,6 @@ def index():
             <input type="number" id="interval_minutes" name="interval_minutes" value="{{ interval_minutes }}" min="5"><br><br>
             <label for="station_filter">Station Filter:</label>
             <input type="text" id="station_filter" name="station_filter" value=""><br><br>
-
-            <label for="result_format">Result format:</label>
-            <select id="result_format" name="result_format">
-                <option value="screen">Result in screen</option>
-                <option value="filejson">Result in json ZIP file</option>
-            </select><br><br>
-
             <input type="submit" value="Submit">
         </form>
         <script>
@@ -243,23 +220,12 @@ def data():
         end_time = request.form['end_time']
         station_filter = request.form.get('station_filter', '')
         interval_minutes = int(request.form.get('interval_minutes', 60))
-        result_format = request.form.get('result_format', 'screen')
 
         if interval_minutes < 5:
             return jsonify({'error': 'Interval must be at least 5 minutes'})
         start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
-
-        if date_diff.days > 100:
-            return jsonify({
-                'error': 'El rango de fechas es demasiado largo. Segmenta y/o reduce el rango a 100 días o menos para evitar problemas de bloqueos por RAM y CPU del servidor'
-            })
-
-        if date_diff.days > 7 and result_format == 'screen':
-            return jsonify({
-                'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
-            })
 
         if date_diff.days > 7:
             all_data = []
@@ -296,7 +262,6 @@ def data():
 
         obs = obs.round(3)
 
-        total_records = obs.shape[0]
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         json_data = obs.to_dict(orient='records')
 
@@ -312,40 +277,19 @@ def data():
                 grouped_data[station] = []
             grouped_data[station].append(record)
 
-        process_duration = time.time() - start_time
-        hours, remainder = divmod(int(process_duration), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
+        # Guardar en un archivo JSON
+        try:
+            filename = f"data_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(filename, 'w') as f:
+                json.dump({'data': grouped_data}, f, indent=4)
 
-        result_data = {
-            'total_records': total_records,
-            'data': grouped_data,
-            'process_duration': formatted_duration
-        }
-
-        if result_format == 'screen':
-            app.logger.debug(f"Data result in screen")
-            return jsonify(result_data)
-        else:
-            # Crear y enviar archivo
-            try:
-                memory_file = create_zip_file(result_data, 'json')
-
-                timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
-                app.logger.debug(f"Data result in file")
-                return Response(
-                    memory_file.getvalue(),
-                    mimetype='application/zip',
-                    headers={
-                        'Content-Disposition': f'attachment; filename={filename}',
-                        'Content-Type': 'application/zip'
-                    }
-                )
-
-            except Exception as e:
-                app.logger.error(f'Error creating download file: {str(e)}')
-                return jsonify({'error': f'Error creating download file: {str(e)}'})
+            return jsonify({
+                'message': 'Data successfully saved to JSON file',
+                'filename': filename
+            })
+        except Exception as e:
+            app.logger.error(f'Error creating json file: {str(e)}')
+            return jsonify({'error': f'Error creating json file: {str(e)}'})
 
     except Exception as e:
         app.logger.error(f'Error in data endpoint: {str(e)}')
