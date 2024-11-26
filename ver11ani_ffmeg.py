@@ -99,20 +99,41 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
         center[1] - half_size_lat, center[1] + half_size_lat
     ]
 
+    # Fuentes de mapas gratuitas y sin API key
     tile_sources = {
-        'osm': ctx.providers.OpenStreetMap.Mapnik,
-        'cartodb': ctx.providers.CartoDB.Positron,
-        'cartodb_dark': ctx.providers.CartoDB.DarkMatter,
+        # Mapas base estándar
+        'osm': ctx.providers.OpenStreetMap.Mapnik,  # Mapa estándar OpenStreetMap
+        'osm_hot': ctx.providers.OpenStreetMap.HOT,  # Estilo humanitario de OSM
+        'osm_de': ctx.providers.OpenStreetMap.DE,  # Estilo alemán de OSM
+        
+        # Mapas sencillos
+        'cartodb_positron': ctx.providers.CartoDB.Positron,  # Estilo claro de CartoDB
+        'cartodb_dark': ctx.providers.CartoDB.DarkMatter,  # Estilo oscuro de CartoDB
+
+        # Mapa satelital
         'satellite': ctx.providers.Esri.WorldImagery,
     }
 
+    # Obtener el proveedor de tiles seleccionado o usar OSM por defecto
     tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
 
-    # Configure DPI based on zoom and aspect ratio
-    if map_style == 'osm':
-        base_dpi = 50 if zoom <= 5 else 72 if zoom <= 8 else 120 if zoom <= 11 else 150
-    else:
-        base_dpi = 100 if zoom <= 5 else 150 if zoom <= 8 else 200 if zoom <= 11 else 250
+    # Ajustar la calidad de imagen según el proveedor
+    provider_dpis = {
+        'osm': 150,
+        'osm_hot': 150,
+        'osm_de': 150,
+        'cartodb_positron':150,  # Mayor DPI para mapas CartoDB
+        'cartodb_dark': 250,
+        'satellite': 120,
+    }
+
+    base_dpi = provider_dpis.get(map_style, 120)  # DPI por defecto
+    if zoom <= 5:
+        base_dpi = max(50, base_dpi - 50)
+    elif zoom <= 8:
+        base_dpi = max(72, base_dpi - 30)
+    elif zoom <= 11:
+        base_dpi = max(120, base_dpi - 10)
 
     fig = plt.figure(figsize=fig_size, dpi=base_dpi)
     ax = plt.axes(projection=ccrs.PlateCarree())
@@ -261,10 +282,18 @@ def getdata():
             
             <label for="map_style">Estilo de mapa:</label><br>
             <select id="map_style" name="map_style">
-                <option value="osm">OpenStreetMap</option>
-                <option value="cartodb">CartoDB Positron (Claro)</option>
-                <option value="cartodb_dark">CartoDB Dark Matter (Oscuro)</option>
-                <option value="satellite">Esri Satélite</option>
+                <optgroup label="Mapas Base">
+                    <option value="osm">OpenStreetMap Standard</option>
+                    <option value="osm_hot">OpenStreetMap Humanitarian</option>
+                    <option value="osm_de">OpenStreetMap German Style</option>
+                </optgroup>
+                <optgroup label="Estilos CartoDB">
+                    <option value="cartodb_positron">CartoDB Positron (Claro)</option>
+                    <option value="cartodb_dark">CartoDB Dark Matter</option>
+                </optgroup>
+                    <optgroup label="Satelital">
+                    <option value="satellite">Esri Satélite</option>
+                </optgroup>
             </select><br><br>
             
             <label>Aspect Ratio:</label><br>
