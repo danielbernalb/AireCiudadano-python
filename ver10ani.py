@@ -1,4 +1,4 @@
-# p1claudef: Parece todo bien, seguir probando. 4 meses van bien.
+# Version de APIdata para video. 26nov2024
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import requests
@@ -11,12 +11,10 @@ import zipfile
 import json
 import logging
 
-# Constants
 selected_cols = [
     "PM25", "PM25raw", "Humidity", "Temperature", "ConfigVal", "Latitude", "Longitude", "InOut",
 ]
 
-# Flask application
 app = Flask(__name__)
 app.logger.setLevel(logging.DEBUG)
 
@@ -25,11 +23,9 @@ def create_zip_file(data, file_format='json'):
 
     try:
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Convert data to JSON string
             data_str = json.dumps(data, indent=2)
             zf.writestr('data.json', data_str)
 
-        # Important: seek to beginning of file
         memory_file.seek(0)
         return memory_file
 
@@ -54,7 +50,6 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime, interva
 
         interval_chunks = []
         for station, group in chunk_data.groupby('station'):
-            # Resamplear a intervalos configurables y calcular promedio
             interval_str = f'{interval_minutes}T'
             interval_data = group.resample(interval_str, level='date').mean()
             interval_data.index = interval_data.index + pd.Timedelta(minutes=interval_minutes)
@@ -66,7 +61,6 @@ def process_data_in_chunks(url, variables, start_datetime, end_datetime, interva
 
         current_start = current_end
 
-        # Yield progress information
         progress = {
             'current_date': current_end.isoformat(),
             'progress_percentage': min(100, (current_end - start_datetime) / (end_datetime - start_datetime) * 100)
@@ -93,23 +87,19 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             response.raise_for_status()
             data = response.json().get('data', {}).get('result', [])
 
-            # Si no hay datos en este intervalo, avanzar al siguiente
             if not data:
                 app.logger.warning(f"No data returned from API for interval {current_start_time} to {current_end_time}")
                 current_start_time = current_end_time
                 continue
 
             df = pd.json_normalize(data)
-#            app.logger.debug(f"Dataframe shape after json_normalize: {df.shape}")
 
-            # Verificar si tenemos las columnas necesarias antes de procesar
             required_columns = ['metric.__name__', 'metric.exported_job', 'values'] if 'values' in df.columns else ['metric.__name__', 'metric.exported_job', 'value']
             if not all(col in df.columns for col in required_columns):
                 app.logger.warning(f"Missing required columns for interval {current_start_time} to {current_end_time}")
                 current_start_time = current_end_time
                 continue
 
-            # Explode values and check for presence of station column
             if 'values' in df.columns:
                 df = df.explode('values')
                 df['date'] = df['values'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
@@ -119,20 +109,15 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
                 df['date'] = df['value'].apply(lambda x: datetime.datetime.utcfromtimestamp(x[0]).isoformat())
                 df['value'] = df['value'].apply(lambda x: x[1])
 
-            # Rename columns
             df = df.rename(columns={"metric.__name__": "metric_name", "metric.exported_job": "station"})
-#            app.logger.debug(f"Columns in dataframe after renaming: {df.columns}")
 
-            # Verificar si tenemos la columna station después del renombrado
             if 'station' not in df.columns:
                 app.logger.warning(f"Missing 'station' column after renaming for interval {current_start_time} to {current_end_time}")
                 current_start_time = current_end_time
                 continue
 
-            # Filter out null stations
             df = df[df['station'].notnull()]
 
-            # Si no quedan filas después del filtrado, avanzar al siguiente intervalo
             if df.empty:
                 app.logger.warning(f"No valid data after filtering for interval {current_start_time} to {current_end_time}")
                 current_start_time = current_end_time
@@ -145,18 +130,14 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
                 current_start_time = current_end_time
                 continue
 
-            # Convert numeric columns
             for col in selected_cols:
                 if col in df_result.columns:
                     df_result[col] = df_result[col].astype(float)
             if 'Latitude' in df_result.columns:
-#                df_result['Latitude'].replace(0, np.nan, inplace=True)
                 df_result['Latitude'] = df_result['Latitude'].replace(0, np.nan)
             if 'Longitude' in df_result.columns:
-#                df_result['Longitude'].replace(0, np.nan, inplace=True)
                 df_result['Longitude'] = df_result['Longitude'].replace(0, np.nan)
 
-#            app.logger.debug(f"Dataframe shape after processing and cleaning: {df_result.shape}")
             all_results.append(df_result)
 
         except requests.exceptions.RequestException as e:
@@ -164,13 +145,11 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             raise
         except Exception as e:
             app.logger.error(f'Error processing data chunk: {str(e)}')
-            # En caso de error, avanzar al siguiente intervalo en lugar de hacer raise
             current_start_time = current_end_time
             continue
 
         current_start_time = current_end_time
 
-    # Si no tenemos resultados, devolver un DataFrame vacío con las columnas correctas
     if not all_results:
         app.logger.warning("No valid data found for entire time range")
         columns = ['station', 'date'] + selected_cols
@@ -282,7 +261,6 @@ def data():
                 'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
             })
 
-        # Process data
         if date_diff.days > 7:
             all_data = []
             for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, interval_minutes):
@@ -292,10 +270,8 @@ def data():
                 all_data.append(chunk_data)
             obs = pd.concat(all_data, ignore_index=True)
         else:
-            # Obtener datos y redondear a 3 decimales todas las columnas numéricas
             obs = get_data(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime, '1m', interval_minutes=interval_minutes)
 
-            # Apply hourly average
             obs['date'] = pd.to_datetime(obs['date'], utc=True)
             obs.set_index(['station', 'date'], inplace=True)
             obs = obs.apply(pd.to_numeric, errors='coerce')
@@ -313,27 +289,22 @@ def data():
                 filters = station_filter.split(',')
                 obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
 
-        # Convertir las fechas a UTC
         start_datetime = pd.to_datetime(start_datetime).tz_localize('UTC')
         end_datetime = pd.to_datetime(end_datetime).tz_localize('UTC')
 
-        # Filtrar el DataFrame por el rango de fechas
         obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
 
-        # Redondear a 3 decimales antes de guardar en JSON o CSV
         obs = obs.round(3)
 
         total_records = obs.shape[0]
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         json_data = obs.to_dict(orient='records')
 
-        # Clean up NaN values
         for record in json_data:
             for key, value in record.items():
                 if pd.isna(value):
                     record[key] = None
 
-        # Group by station
         grouped_data = {}
         for record in json_data:
             station = record.pop('station')
