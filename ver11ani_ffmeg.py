@@ -29,7 +29,6 @@ def convert_video_to_android_compatible(input_path, output_path):
         subprocess.run([
             "ffmpeg", "-y",
             "-i", input_path,
-#            "-vf", "scale=w=3840:h=2160:force_original_aspect_ratio=decrease",
             "-vf", "scale=-1:1440",  # Scale height to 1440p, width adjusts accordingly
             "-c:v", "libx264",
             "-profile:v", "baseline",
@@ -78,9 +77,23 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
     grouped = df.groupby('date')
     sorted_df_dates = sorted(df['date'].unique())
     center = [center_lon, center_lat]
+    
+    # Calculate resolution and extent
     resolution = 360 / (2 ** zoom)
-    half_size_lon = 0.5 * resolution
+    
+    # Aspect ratios configuration
+    aspect_ratios = {
+        '1:1': (10, 10),
+        '4:3': (12, 9),
+        '16:9': (16, 9),
+    }
+    fig_size = aspect_ratios.get(aspect_ratio, (10, 10))
+    
+    # Calculate extent based on aspect ratio
+    aspect_ratio_value = fig_size[0] / fig_size[1]
+    half_size_lon = 0.5 * resolution * aspect_ratio_value
     half_size_lat = 0.5 * resolution
+    
     extent = [
         center[0] - half_size_lon, center[0] + half_size_lon,
         center[1] - half_size_lat, center[1] + half_size_lat
@@ -95,31 +108,32 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
 
     tile_source = tile_sources.get(map_style, ctx.providers.OpenStreetMap.Mapnik)
 
-    aspect_ratios = {
-        '1:1': (10, 10),
-        '4:3': (12, 9),
-        '16:9': (16, 9),
-    }
-    fig_size = aspect_ratios.get(aspect_ratio, (10, 10))
-
+    # Configure DPI based on zoom and aspect ratio
     if map_style == 'osm':
-        fig = plt.figure(figsize=(10, 10), dpi=50 if zoom <= 5 else 72 if zoom <= 8 else 120 if zoom <= 11 else 150)
+        base_dpi = 50 if zoom <= 5 else 72 if zoom <= 8 else 120 if zoom <= 11 else 150
     else:
-        fig = plt.figure(figsize=(10, 10), dpi=100 if zoom <= 5 else 150 if zoom <= 8 else 200 if zoom <= 11 else 250)
+        base_dpi = 100 if zoom <= 5 else 150 if zoom <= 8 else 200 if zoom <= 11 else 250
 
-
+    fig = plt.figure(figsize=fig_size, dpi=base_dpi)
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    # Configurar proporción del eje basado en el tamaño de la figura
-    ax.set_aspect(fig_size[0] / fig_size[1])
+    # Remove the problematic aspect ratio setting
+    # ax.set_aspect(fig_size[1] / fig_size[0])  # Remove this line
 
     ctx.add_basemap(ax, source=tile_source, crs=ccrs.PlateCarree(), zoom=zoom_base, alpha=alpha)
 
+    # Adjust subplot parameters based on aspect ratio
+    if aspect_ratio == '16:9':
+        plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.05)
+    elif aspect_ratio == '4:3':
+        plt.subplots_adjust(left=0.02, right=0.98, top=0.95, bottom=0.05)
+    else:  # 1:1
+        plt.subplots_adjust(left=0.02, right=0.99, top=0.95, bottom=0.02)
+
+    # Rest of your existing code remains the same
     ax.add_feature(cfeature.BORDERS, linestyle=':', edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
-
-    plt.subplots_adjust(left=0.02, right=0.99, top=0.95, bottom=0.02)
 
     scatter = ax.scatter(
         [], [], s=10 * size_scale, transform=ccrs.PlateCarree(),
