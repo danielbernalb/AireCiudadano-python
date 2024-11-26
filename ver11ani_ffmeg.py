@@ -1,7 +1,7 @@
 # Agregar opciones como:
 # 1. eliminar sensores con defectos, Va en la API data
 # 3. ajustes a sensores Sensirion SPS30, Plantower, va en la API data
-# 4. resolucion de salida de pantalla: 1-1 4-3 16-9
+# 5. Probable union de APIdata con APIvideo
 
 import os
 import json
@@ -28,13 +28,14 @@ def convert_video_to_android_compatible(input_path, output_path):
     try:
         subprocess.run([
             "ffmpeg", "-y",
+            "-loglevel", "warning",
             "-i", input_path,
             "-vf", "scale=-1:1440",  # Scale height to 1440p, width adjusts accordingly
             "-c:v", "libx264",
             "-profile:v", "baseline",
             "-level", "3.0",
             "-pix_fmt", "yuv420p",
-            "-b:v", "3000k",
+            "-b:v", "1000k",
             "-movflags", "+faststart",
             "-c:a", "aac",
             "-b:a", "128k",
@@ -188,6 +189,7 @@ def create_animation(df, output_path, fps=2, size_scale=2, map_style='osm', alph
     # Función de actualización de los frames
     def update(frame):
         current_time = sorted_df_dates[frame]
+        app.logger.debug(f"Actualizando frame para la fecha: {current_time}")
         data_frame = grouped.get_group(current_time)
         data_frame = data_frame[data_frame['InOut'] == 0.0]
 
