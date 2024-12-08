@@ -1,4 +1,5 @@
 # Version de APIdata para video. 26nov2024
+# Resultado en la hora GMT escogida, ejemplo si es de 8:00am a 10:00am con GMT-5, el resultado es la consulta de 3:00am a 5:00am con GMT
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import requests
@@ -8,6 +9,7 @@ import numpy as np
 import time
 import io
 import json
+import pytz
 import logging
 
 selected_cols = [
@@ -64,7 +66,6 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
         query_url = f"{url}&start={current_start_time.isoformat()}Z&end={current_end_time_1s.isoformat()}Z&step={step}"
 
         app.logger.debug(f"Querying data from {current_start_time} to {current_end_time_1s}")
-#        app.logger.debug(f"url: {query_url}")
 
         try:
             response = requests.get(query_url)
@@ -167,7 +168,9 @@ def index():
     end_date = request.args.get('end_date', '2024-05-09')
     end_time = request.args.get('end_time', '10:00')
     station_filter = request.args.get('station_filter', '')
+    exclude_stations = request.args.get('exclude_stations', '')
     interval_minutes = request.args.get('interval_minutes', 60)
+    gmt_offset = request.args.get('gmt_offset', 0)
 
     return render_template_string('''
         <form action="/dataresult" method="post">
@@ -190,20 +193,22 @@ def index():
             <input type="time" id="end_time" name="end_time" value="{{ end_time }}" step="60"><br><br>
             <label for="interval_minutes">Interval (minutes):</label>
             <input type="number" id="interval_minutes" name="interval_minutes" value="{{ interval_minutes }}" min="5"><br><br>
-            <label for="station_filter">Station Filter:</label>
-            <input type="text" id="station_filter" name="station_filter" value=""><br><br>
+            <label for="station_filter">Station Filter (include):</label>
+            <input type="text" id="station_filter" name="station_filter" value="{{ station_filter }}"><br><br>
+            <label for="exclude_stations">Station Filter (exclude):</label>
+            <input type="text" id="exclude_stations" name="exclude_stations" value="{{ exclude_stations }}"><br><br>
+            <label for="gmt_offset">Select GMT offset:</label>
+            <select id="gmt_offset" name="gmt_offset">
+                {% for i in range(-12, 13) %}
+                    <option value="{{ i }}" {% if i == gmt_offset|int %}selected{% endif %}>GMT{{ '+' if i >= 0 else '' }}{{ i }}</option>
+                {% endfor %}
+            </select><br><br>
             <input type="submit" value="Submit">
         </form>
-        <script>
-            function toggle(source) {
-                checkboxes = document.getElementsByName('variables');
-                for (var i = 0; i < checkboxes.length; i++) {
-                    checkboxes[i].checked = source.checked;
-                }
-            }
-        </script>
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date,
-       start_time=start_time, end_date=end_date, end_time=end_time, interval_minutes=interval_minutes)
+       start_time=start_time, end_date=end_date, end_time=end_time,
+       interval_minutes=interval_minutes, station_filter=station_filter,
+       exclude_stations=exclude_stations, gmt_offset=gmt_offset)
 
 @app.route('/dataresult', methods=['POST'])
 def data():
@@ -219,12 +224,16 @@ def data():
         end_date = request.form['end_date']
         end_time = request.form['end_time']
         station_filter = request.form.get('station_filter', '')
+        exclude_stations = request.form.get('exclude_stations', '')  # Nuevo campo para excluir estaciones
         interval_minutes = int(request.form.get('interval_minutes', 60))
+        gmt_offset = int(request.form.get('gmt_offset', 0))  # GMT seleccionado
 
         if interval_minutes < 5:
             return jsonify({'error': 'Interval must be at least 5 minutes'})
-        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
-        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
+        
+        # Ajustar las horas según el GMT seleccionado
+        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}") + datetime.timedelta(hours=gmt_offset)
+        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}") + datetime.timedelta(hours=gmt_offset)
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
 
         if date_diff.days > 7:
@@ -233,6 +242,9 @@ def data():
                 if station_filter:
                     filters = station_filter.split(',')
                     chunk_data = chunk_data[chunk_data['station'].str.contains('|'.join(filters), case=False)]
+                if exclude_stations:  # Aplicar exclusión de estaciones
+                    excludes = exclude_stations.split(',')
+                    chunk_data = chunk_data[~chunk_data['station'].str.contains('|'.join(excludes), case=False)]
                 all_data.append(chunk_data)
             obs = pd.concat(all_data, ignore_index=True)
         else:
@@ -252,16 +264,33 @@ def data():
             obs = pd.concat(averaged_data, ignore_index=True)
 
             if station_filter:
+                app.logger.debug(f"station_filter routine")
                 filters = station_filter.split(',')
                 obs = obs[obs['station'].str.contains('|'.join(filters), case=False)]
+            if exclude_stations:  # Aplicar exclusión de estaciones
+                app.logger.debug(f"exclude_stations routine")
+                excludes = exclude_stations.split(',')
+                obs = obs[~obs['station'].str.contains('|'.join(excludes), case=False)]
 
-        start_datetime = pd.to_datetime(start_datetime).tz_localize('UTC')
-        end_datetime = pd.to_datetime(end_datetime).tz_localize('UTC')
+       # Ajustar la fecha/hora a formato UTC y filtrar por rango ajustado
+        start_datetime = pd.to_datetime(start_datetime).tz_localize('UTC') + pd.Timedelta(hours=gmt_offset)
+        end_datetime = pd.to_datetime(end_datetime).tz_localize('UTC') + pd.Timedelta(hours=gmt_offset)
 
-        obs = obs[(obs['date'] >= start_datetime) & (obs['date'] <= end_datetime)]
+        # Aseguramos que obs['date'] también esté en UTC
+        if obs['date'].dtype == 'object':  # Si es texto, convertir a datetime
+            obs['date'] = pd.to_datetime(obs['date'])
+            app.logger.debug(f"Si es texto, convertir a datetime")
 
+        if obs['date'].dt.tz is None:  # Si no tiene zona horaria, asignar UTC
+            obs['date'] = obs['date'].dt.tz_localize('UTC')
+            app.logger.debug(f"Si no tiene zona horaria, asignar UTC")
+
+        obs['date'] = obs['date'] - pd.Timedelta(hours=gmt_offset)
+        
         obs = obs.round(3)
 
+
+        # Ajustar formato de fecha para visualización
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         json_data = obs.to_dict(orient='records')
 
