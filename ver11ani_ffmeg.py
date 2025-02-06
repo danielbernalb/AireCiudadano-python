@@ -66,6 +66,13 @@ def create_dataframe(json_data):
     records = []
     for station, entries in json_data.items():
         for entry in entries:
+            # Comprobar si ConfigVal está presente y es divisible por 4 sin residuo
+            if "ConfigVal" in entry:
+                config_val = entry["ConfigVal"]
+                if isinstance(config_val, (int, float)) and (config_val % 4 == 0):
+                    # Usar PM25raw en lugar de PM25
+                    entry["PM25"] = entry.get("PM25raw", entry["PM25"])
+            
             entry["station"] = station
             records.append(entry)
     df = pd.DataFrame(records)
