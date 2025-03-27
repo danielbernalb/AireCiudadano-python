@@ -232,8 +232,8 @@ def data():
             return jsonify({'error': 'Interval must be at least 5 minutes'})
         
         # Ajustar las horas según el GMT seleccionado
-        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}") + datetime.timedelta(hours=gmt_offset)
-        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}") + datetime.timedelta(hours=gmt_offset)
+        start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}") - datetime.timedelta(hours=gmt_offset)
+        end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}") - datetime.timedelta(hours=gmt_offset)
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
 
         if date_diff.days > 7:
@@ -273,8 +273,8 @@ def data():
                 obs = obs[~obs['station'].str.contains('|'.join(excludes), case=False)]
 
        # Ajustar la fecha/hora a formato UTC y filtrar por rango ajustado
-        start_datetime = pd.to_datetime(start_datetime).tz_localize('UTC') - pd.Timedelta(hours=gmt_offset)
-        end_datetime = pd.to_datetime(end_datetime).tz_localize('UTC') - pd.Timedelta(hours=gmt_offset)
+        start_datetime = pd.to_datetime(start_datetime).tz_localize('UTC') + pd.Timedelta(hours=gmt_offset)
+        end_datetime = pd.to_datetime(end_datetime).tz_localize('UTC') + pd.Timedelta(hours=gmt_offset)
 
         # Aseguramos que obs['date'] también esté en UTC
         if obs['date'].dtype == 'object':  # Si es texto, convertir a datetime

@@ -64,6 +64,12 @@ def pm25_to_color(pm25):
 
 def create_dataframe(json_data):
     records = []
+    estaciones_ajuste_pm25 = {
+        "AireCiudadano_CO_BO_Hayuelos_6d4d48", 
+        "AireCiudadano_Cindesus_17611c", 
+        "Abago_EduardoSantos_ce0eb0"
+    }
+    
     for station, entries in json_data.items():
         for entry in entries:
             # Comprobar si ConfigVal está presente y es divisible por 4 sin residuo
@@ -72,6 +78,14 @@ def create_dataframe(json_data):
                 if isinstance(config_val, (int, float)) and (config_val % 4 == 0):
                     # Usar PM25raw en lugar de PM25
                     entry["PM25"] = entry.get("PM25raw", entry["PM25"])
+            
+            # Ajustar PM25 para estaciones específicas
+            if station in estaciones_ajuste_pm25 and "PM25" in entry:
+                # Verificar que PM25 no sea None antes de hacer el cálculo
+                if entry["PM25"] is not None:
+                    entry["PM25"] = ((1207 * float(entry["PM25"])) / 1000) - 1.01
+                # Si es None, podemos dejarlo como None o asignarle un valor por defecto
+                # Por ejemplo: entry["PM25"] = 0  # si quieres usar 0 como valor por defecto
             
             entry["station"] = station
             records.append(entry)
