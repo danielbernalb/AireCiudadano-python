@@ -1,4 +1,4 @@
-# p1claudef: Parece todo bien, seguir probando. 4 meses van bien.
+# APP instalada 17 oct 2025
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading  # Import the threading module

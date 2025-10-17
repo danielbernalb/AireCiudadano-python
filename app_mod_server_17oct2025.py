@@ -1,4 +1,4 @@
-# Editada de la original para limitar mucho más los cáculos por consumo excesivo de RAM
+# APP Mod: Editada de la original para limitar mucho más los cáculos por consumo excesivo de RAM
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading  # Import the threading module

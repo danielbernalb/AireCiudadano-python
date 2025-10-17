@@ -1,4 +1,4 @@
-# Para servidor local sin limites
+# APP modificada 17 oct 2025, probable para LOCAL
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading  # Import the threading module
