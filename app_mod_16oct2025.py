@@ -1,4 +1,4 @@
-# APP instalada 17 oct 2025
+# Para servidor local sin limites
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading  # Import the threading module
@@ -100,7 +100,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
 
     while current_start_time < end_datetime:
         # Agregar una pausa de 500 milisegundos entre consultas
-        time.sleep(2)
+        time.sleep(1)
         current_end_time = min(current_start_time + datetime.timedelta(minutes=interval_minutes), end_datetime)
         current_start_time_1s = current_start_time + pd.Timedelta(seconds=1)
         query_url = f"{url}&start={current_start_time_1s.isoformat()}Z&end={current_end_time.isoformat()}Z&step={step}"
@@ -111,7 +111,6 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             response = requests.get(query_url)
             response.raise_for_status()
             data = response.json().get('data', {}).get('result', [])
-            time.sleep(0.5)
 
             # Si no hay datos en este intervalo, avanzar al siguiente
             if not data:
@@ -297,14 +296,18 @@ def data():
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
 
-        if date_diff.days > 2:
-            processing_lock.release()
+        if date_diff.days > 100:
             return jsonify({
-                'error': 'El rango de fechas es demasiado largo. Segmenta y/o reduce el rango para evitar problemas de bloqueos por RAM y CPU del servidor o escribenos para enviarte el archivo python del API para que lo ejecutes en local y no tengas problemas'
+                'error': 'El rango de fechas es demasiado largo. Segmenta y/o reduce el rango a 100 días o menos para evitar problemas de bloqueos por RAM y CPU del servidor'
+            })
+
+        if date_diff.days > 7 and result_format == 'screen':
+            return jsonify({
+                'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
             })
 
         # Process data
-        if date_diff.days > 1:
+        if date_diff.days > 7:
             all_data = []
             for progress, chunk_data in process_data_in_chunks(f"{base_url}/query_range?query={query}", variables, start_datetime, end_datetime):
                 if station_filter:

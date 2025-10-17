@@ -1,4 +1,4 @@
-# APP Mod: Editada de la original para limitar mucho más los cáculos por consumo excesivo de RAM
+# p1claudef: Parece todo bien, seguir probando. 4 meses van bien.
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading  # Import the threading module
@@ -111,6 +111,7 @@ def get_data(url, selected_cols, start_datetime, end_datetime, step, interval_mi
             response = requests.get(query_url)
             response.raise_for_status()
             data = response.json().get('data', {}).get('result', [])
+            time.sleep(0.5)
 
             # Si no hay datos en este intervalo, avanzar al siguiente
             if not data:
@@ -296,7 +297,8 @@ def data():
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         date_diff = end_datetime - start_datetime + datetime.timedelta(minutes=60)
 
-        if date_diff.days > 3:
+        if date_diff.days > 2:
+            processing_lock.release()
             return jsonify({
                 'error': 'El rango de fechas es demasiado largo. Segmenta y/o reduce el rango para evitar problemas de bloqueos por RAM y CPU del servidor o escribenos para enviarte el archivo python del API para que lo ejecutes en local y no tengas problemas'
             })
