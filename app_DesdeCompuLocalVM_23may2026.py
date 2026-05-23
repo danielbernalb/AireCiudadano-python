@@ -49,65 +49,90 @@ def create_zip_file(data, file_format='json'):
         app.logger.error(f'Error creating zip file: {str(e)}')
         raise
 
-# Nueva función simple sin chunks
+# Nueva función con "chunks" ultrarrápidos para evitar el límite 422 de VictoriaMetrics
 def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
-    start_str = start_datetime.isoformat() + "Z"
-    end_str = end_datetime.isoformat() + "Z"
-    
-    # Se añade step=1h nativo a la consulta
-    query_url = f"{base_url}/query_range?query={urllib.parse.quote(query)}&start={start_str}&end={end_str}&step=1h"
-    
-    app.logger.debug(f"Querying VictoriaMetrics from {start_str} to {end_str}")
-    
-    response = requests.get(query_url)
-    response.raise_for_status()
-    data = response.json().get('data', {}).get('result', [])
+    chunk_size = datetime.timedelta(days=90) # Pedimos en bocados de 3 meses máximo
+    current_start = start_datetime
+    all_data = []
 
-    if not data:
-        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
-
-    df = pd.json_normalize(data)
-    
-    # VictoriaMetrics limpio usa metric.job para la estación
-    if 'metric.job' not in df.columns:
-        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
-
-    if 'values' in df.columns:
-        df = df.explode('values')
-        df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], tz=datetime.timezone.utc).isoformat())
-        df['value'] = df['values'].apply(lambda x: float(x[1]))
-        df = df.drop(columns="values")
-
-    # Renombramos usando el 'job' directo
-    df = df.rename(columns={"metric.__name__": "metric_name", "metric.job": "station"})
-    df = df[df['station'].notnull()]
-
-    if df.empty:
-        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
-
-    # Pivot table a formato ancho
-    df_result = pd.pivot(df, index=['station', 'date'], columns='metric_name', values='value').reset_index()
-    
-    # Asegurar que todas las columnas existan, incluso si vienen vacías
-    for col in selected_cols:
-        if col not in df_result.columns:
-            df_result[col] = np.nan
+    while current_start < end_datetime:
+        current_end = min(current_start + chunk_size, end_datetime)
+        
+        start_str = current_start.isoformat() + "Z"
+        end_str = current_end.isoformat() + "Z"
+        
+        query_url = f"{base_url}/query_range?query={urllib.parse.quote(query)}&start={start_str}&end={end_str}&step=1h"
+        
+        app.logger.debug(f"Querying VictoriaMetrics chunk from {start_str} to {end_str}")
+        
+        try:
+            response = requests.get(query_url)
             
-    return df_result
+            # Si ocurre el error 422, imprimimos el mensaje real de la base de datos
+            if response.status_code == 422:
+                app.logger.error(f"VM Limit Error Detail: {response.text}")
+                
+            response.raise_for_status()
+            data = response.json().get('data', {}).get('result', [])
 
+            if data:
+                df = pd.json_normalize(data)
+                
+                # Verificamos que tenga la columna de la estación
+                if 'metric.job' in df.columns and 'values' in df.columns:
+                    df = df.explode('values')
+                    df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], tz=datetime.timezone.utc).isoformat())
+                    df['value'] = df['values'].apply(lambda x: float(x[1]))
+                    df = df.drop(columns="values")
+
+                    df = df.rename(columns={"metric.__name__": "metric_name", "metric.job": "station"})
+                    df = df[df['station'].notnull()]
+
+                    if not df.empty:
+                        # Usamos pivot_table con aggfunc='mean' para promediar cualquier duplicado en caso de choque de sensores
+                        df_result = pd.pivot_table(df, index=['station', 'date'], columns='metric_name', values='value', aggfunc='mean').reset_index()
+                        all_data.append(df_result)
+                        
+        except Exception as e:
+            app.logger.error(f'Error processing chunk: {str(e)}')
+            # En lugar de romper todo, saltamos al siguiente chunk
+            pass 
+
+        current_start = current_end
+
+    # Si no obtuvimos ningún dato de ningún chunk, devolvemos DataFrame vacío
+    if not all_data:
+        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
+
+    # Pegamos todos los bloques de 3 meses en una sola tabla gigante
+    final_df = pd.concat(all_data, ignore_index=True)
+    
+    # Aseguramos que todas las columnas existan
+    for col in selected_cols:
+        if col not in final_df.columns:
+            final_df[col] = np.nan
+            
+    return final_df
 
 @app.route('/getdata')
 def index():
     variables = request.args.getlist('variables') or selected_cols
-    start_date = request.args.get('start_date', '2024-05-09')
-    start_time = request.args.get('start_time', '08:00')
-    end_date = request.args.get('end_date', '2024-05-09')
-    end_time = request.args.get('end_time', '10:00')
+# 1. Calculamos las fechas dinámicas (Hoy y hace 7 días)
+    now = datetime.datetime.now()
+    one_week_ago = now - datetime.timedelta(days=7)
+    
+    # 2. Asignamos los valores por defecto calculados
+    start_date = request.args.get('start_date', one_week_ago.strftime('%Y-%m-%d'))
+    start_time = request.args.get('start_time', '00:00') # Comienza a la medianoche de hace 7 días
+    end_date = request.args.get('end_date', now.strftime('%Y-%m-%d'))
+    end_time = request.args.get('end_time', '00:00')     # Termina a las 23:00 de hoy
+    
     station_filter = request.args.get('station_filter', '')
 
     return render_template_string('''
         <form action="/dataresult" method="post">
-            <h2>API AIRECIUDADANO v2.0 (VictoriaMetrics)</h2>
+            <h2>API AIRECIUDADANO v2.0 (VM)</h2>
+            <h3>Instructions at: <a href="https://aireciudadano.com/apidatavm/" target="_blank">aireciudadano.com/apidata</a></h3><br>
             <label for="variables">Select variables:</label><br><br>
             {% for col in selected_cols %}
                 <input type="checkbox" id="{{ col }}" name="variables" value="{{ col }}" {% if col in variables %}checked{% endif %}>
@@ -168,6 +193,11 @@ def data():
             return jsonify({
                 'error': 'El cálculo máximo permitido es de 1 año completo (365 días). Por favor reduce el rango de fechas.'
             })
+        
+        if date_diff.days > 7 and result_format == 'screen':
+            return jsonify({
+            'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
+        })
 
         # Construcción de la consulta PromQL
         metrics_regex = "|".join(variables)
