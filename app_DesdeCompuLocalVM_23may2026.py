@@ -173,7 +173,6 @@ def data():
     start_time_proc = time.time()
     try:
         variables = request.form.getlist('variables')
-        # 3. Nueva URL base apuntando al dominio de producción con el puerto 30001
         base_url = "http://sensor.aireciudadano.com:30001/api/v1"
 
         start_date = request.form['start_date']
@@ -186,20 +185,31 @@ def data():
         start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         
-        # 2. Límite estricto de 1 año (366 días considerando bisiestos)
+        # ==========================================
+        # Validación de límites de 3 niveles
+        # ==========================================
         date_diff = end_datetime - start_datetime
-        if date_diff.days > 366:
-            processing_lock.release()
-            return jsonify({
-                'error': 'El cálculo máximo permitido es de 1 año completo (365 días). Por favor reduce el rango de fechas.'
-            })
         
-        if date_diff.days > 7 and result_format == 'screen':
-            return jsonify({
-            'error': 'For time ranges longer than 7 days, please select JSON or CSV file format'
-        })
+        if result_format == 'screen':
+            if date_diff.days > 7:
+                processing_lock.release()
+                return jsonify({
+                    'error': 'Para visualización en pantalla, el límite máximo es de 7 días para no bloquear tu navegador. Por favor reduce el rango de fechas o selecciona descargar en archivo JSON o CSV.'
+                })
+        elif result_format == 'filejson':
+            if date_diff.days > 183:
+                processing_lock.release()
+                return jsonify({
+                    'error': 'Para descargar en formato JSON, el límite máximo es de 6 meses (183 días) debido al peso de los datos. Por favor reduce el rango de fechas o selecciona el formato CSV.'
+                })
+        elif result_format == 'filecsv':
+            if date_diff.days > 366:
+                processing_lock.release()
+                return jsonify({
+                    'error': 'El límite máximo para descargas en formato CSV es de 1 año completo (365 días). Por favor reduce el rango de fechas.'
+                })
 
-        # Construcción de la consulta PromQL
+        # Construcción de query
         metrics_regex = "|".join(variables)
         if station_filter:
             station_regex = station_filter.replace(',', '|')
@@ -207,44 +217,60 @@ def data():
         else:
             query = f'{{__name__=~"{metrics_regex}"}}'
 
-        # Fetch directo sin chunks
+        # Descarga desde VictoriaMetrics
         obs = fetch_vm_data(base_url, query, variables, start_datetime, end_datetime)
 
         if obs.empty:
             processing_lock.release()
             return jsonify({'message': 'No data found for the selected period.'})
 
-        # Dar formato exacto al viejo script para que la comparación sea impecable
+        # Dar formato
         obs['date'] = pd.to_datetime(obs['date'], utc=True)
         obs = obs.sort_values(by=['station', 'date'])
 
-        # Redondear a 3 decimales
         for col in variables:
             if col in obs.columns:
                 obs[col] = pd.to_numeric(obs[col], errors='coerce').round(3)
 
         total_records = obs.shape[0]
         obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-        json_data = obs.to_dict(orient='records')
 
-        # Limpiar NaNs
-        for record in json_data:
-            for key, value in record.items():
-                if pd.isna(value):
-                    record[key] = None
-
-        # Agrupar por estación
-        grouped_data = {}
-        for record in json_data:
-            station = record.pop('station')
-            if station not in grouped_data:
-                grouped_data[station] = []
-            grouped_data[station].append(record)
+        # Limpieza ultrarrápida de NaNs
+        obs = obs.replace({np.nan: None})
 
         process_duration = time.time() - start_time_proc
         hours, remainder = divmod(int(process_duration), 3600)
         minutes, seconds = divmod(remainder, 60)
         formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
+
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
+
+        # ==========================================
+        # RUTA 1: Vía rápida para archivo CSV
+        # ==========================================
+        if result_format == 'filecsv':
+            memory_file = io.BytesIO()
+            with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+                csv_buffer = io.StringIO()
+                obs.to_csv(csv_buffer, index=False)
+                zf.writestr('data.csv', csv_buffer.getvalue())
+            memory_file.seek(0)
+            
+            processing_lock.release()
+            return Response(
+                memory_file.getvalue(),
+                mimetype='application/zip',
+                headers={'Content-Disposition': f'attachment; filename={filename}'}
+            )
+
+        # ==========================================
+        # RUTA 2: Formato agrupado para JSON / Pantalla
+        # ==========================================
+        grouped_data = {
+            station: group.drop(columns=['station']).to_dict(orient='records') 
+            for station, group in obs.groupby('station')
+        }
 
         result_data = {
             'total_records': total_records,
@@ -252,32 +278,28 @@ def data():
             'process_duration': formatted_duration
         }
 
-        processing_lock.release()
-
         if result_format == 'screen':
+            processing_lock.release()
             return jsonify(result_data)
-        else:
-            try:
-                memory_file = create_zip_file(result_data, 'json' if result_format == 'filejson' else 'csv')
-                timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
-                
-                return Response(
-                    memory_file.getvalue(),
-                    mimetype='application/zip',
-                    headers={
-                        'Content-Disposition': f'attachment; filename={filename}',
-                        'Content-Type': 'application/zip'
-                    }
-                )
-            except Exception as e:
-                return jsonify({'error': f'Error creating download file: {str(e)}'})
+        elif result_format == 'filejson':
+            memory_file = io.BytesIO()
+            with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+                data_str = json.dumps(result_data, indent=2)
+                zf.writestr('data.json', data_str)
+            memory_file.seek(0)
+            
+            processing_lock.release()
+            return Response(
+                memory_file.getvalue(),
+                mimetype='application/zip',
+                headers={'Content-Disposition': f'attachment; filename={filename}'}
+            )
 
     except Exception as e:
         if processing_lock.locked():
             processing_lock.release()
-        app.logger.error(f'Error in data endpoint: {str(e)}')
-        return jsonify({'error': str(e)})
+        app.logger.error(f'Error en endpoint de datos: {str(e)}')
+        return jsonify({'error': f'Error procesando datos: {str(e)}'})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8084)
