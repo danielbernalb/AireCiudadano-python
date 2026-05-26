@@ -1,5 +1,3 @@
-# Para servidor local sin limites VM minutal
-
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading
 import requests
@@ -25,64 +23,71 @@ app.logger.setLevel(logging.DEBUG)
 # Global lock for one-at-a-time processing
 processing_lock = threading.Lock()
 
-# Fetch con chunks de 1 HORA para ver el avance y cuidar la memoria de VM
-def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
-    chunk_size = datetime.timedelta(hours=1)
-    current_start = start_datetime
-    all_data = []
+# Generador Mágico: Descarga por horas, agrupa por días y "suelta" la memoria
+def fetch_vm_data_daily_generator(base_url, query, selected_cols, start_datetime, end_datetime):
+    daily_chunk = datetime.timedelta(days=1)
+    current_day = start_datetime
 
-    while current_start < end_datetime:
-        current_end = min(current_start + chunk_size, end_datetime)
+    while current_day < end_datetime:
+        current_day_end = min(current_day + daily_chunk, end_datetime)
         
-        start_str = current_start.isoformat() + "Z"
-        end_str = current_end.isoformat() + "Z"
+        # Bloques de 1 hora para proteger VictoriaMetrics
+        micro_chunk = datetime.timedelta(hours=1)
+        current_micro = current_day
+        daily_data = []
 
-        # 3. step=1m        
-        query_url = f"{base_url}/query_range?query={urllib.parse.quote(query)}&start={start_str}&end={end_str}&step=1m"
-        
-        app.logger.debug(f"Querying VM chunk: {start_str} to {end_str}")
-        
-        try:
-            response = requests.get(query_url)
-            if response.status_code == 422:
-                app.logger.error(f"VM Limit Error Detail: {response.text}")
-                
-            response.raise_for_status()
-            data = response.json().get('data', {}).get('result', [])
-
-            if data:
-                df = pd.json_normalize(data)
-                
-                if 'metric.job' in df.columns and 'values' in df.columns:
-                    df = df.explode('values')
-                    df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], tz=datetime.timezone.utc).isoformat())
-                    df['value'] = df['values'].apply(lambda x: float(x[1]))
-                    df = df.drop(columns="values")
-
-                    df = df.rename(columns={"metric.__name__": "metric_name", "metric.job": "station"})
-                    df = df[df['station'].notnull()]
-
-                    if not df.empty:
-                        # pivot_table previene errores si un sensor mandó datos dobles en el mismo minuto
-                        df_result = pd.pivot_table(df, index=['station', 'date'], columns='metric_name', values='value', aggfunc='mean').reset_index()
-                        all_data.append(df_result)
-                        
-        except Exception as e:
-            app.logger.error(f'Error processing chunk: {str(e)}')
-            pass 
-
-        current_start = current_end
-
-    if not all_data:
-        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
-
-    final_df = pd.concat(all_data, ignore_index=True)
-    
-    for col in selected_cols:
-        if col not in final_df.columns:
-            final_df[col] = np.nan
+        while current_micro < current_day_end:
+            micro_end = min(current_micro + micro_chunk, current_day_end)
             
-    return final_df
+            start_str = current_micro.isoformat() + "Z"
+            end_str = micro_end.isoformat() + "Z"
+            
+            query_url = f"{base_url}/query_range?query={urllib.parse.quote(query)}&start={start_str}&end={end_str}&step=1m"
+            app.logger.debug(f"Querying VM chunk: {start_str} to {end_str}")
+            
+            try:
+                response = requests.get(query_url)
+                if response.status_code == 422:
+                    app.logger.error(f"VM Limit Error Detail: {response.text}")
+                    
+                response.raise_for_status()
+                data = response.json().get('data', {}).get('result', [])
+
+                if data:
+                    df = pd.json_normalize(data)
+                    
+                    if 'metric.job' in df.columns and 'values' in df.columns:
+                        df = df.explode('values')
+                        df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], tz=datetime.timezone.utc).isoformat())
+                        df['value'] = df['values'].apply(lambda x: float(x[1]))
+                        df = df.drop(columns="values")
+
+                        df = df.rename(columns={"metric.__name__": "metric_name", "metric.job": "station"})
+                        df = df[df['station'].notnull()]
+
+                        if not df.empty:
+                            df_result = pd.pivot_table(df, index=['station', 'date'], columns='metric_name', values='value', aggfunc='mean').reset_index()
+                            daily_data.append(df_result)
+                            
+            except Exception as e:
+                app.logger.error(f'Error processing micro-chunk: {str(e)}')
+                pass 
+
+            current_micro = micro_end
+
+        # Si hubo datos en este día, los empacamos y "rendimos" (yield) a Flask
+        if daily_data:
+            final_daily_df = pd.concat(daily_data, ignore_index=True)
+            for col in selected_cols:
+                if col not in final_daily_df.columns:
+                    final_daily_df[col] = np.nan
+            yield current_day, final_daily_df
+        else:
+            yield current_day, pd.DataFrame(columns=['station', 'date'] + selected_cols)
+            
+        # Al pasar al siguiente ciclo, la RAM del día anterior se limpia sola
+        current_day = current_day_end
+
 
 @app.route('/getdata')
 def index():
@@ -91,7 +96,6 @@ def index():
     now = datetime.datetime.now()
     one_day_ago = now - datetime.timedelta(days=1)
     
-    # Valores por defecto: Exactamente las últimas 24 horas
     start_date = request.args.get('start_date', one_day_ago.strftime('%Y-%m-%d'))
     start_time = request.args.get('start_time', now.strftime('%H:00'))
     end_date = request.args.get('end_date', now.strftime('%Y-%m-%d'))
@@ -115,7 +119,7 @@ def index():
             <form id="dataForm" action="/dataresult" method="post">
                 <h2>API AIRECIUDADANO v2.0 (VM - Raw Per Minute Data)</h2>
                 <div class="alert alert-warning">
-                    <strong>Notice:</strong> This endpoint retrieves raw, minute-by-minute data. Due to the massive data volume, time limits are strictly enforced.
+                    <strong>Notice:</strong> This endpoint retrieves raw, minute-by-minute data. Due to the massive data volume, <b>the maximum download limit is 7 days</b> for all formats.
                 </div>
                 
                 <label><b>Select variables:</b></label><br><br>
@@ -139,7 +143,7 @@ def index():
                 <label>Result format:</label>
                 <select id="result_format" name="result_format">
                     <option value="filejson">Result in ZIP JSON (Max 7 days)</option>
-                    <option value="filecsv">Result in ZIP CSV (Max 31 days)</option>
+                    <option value="filecsv">Result in ZIP CSV (Max 7 days)</option>
                 </select><br><br>
 
                 <input type="submit" id="submitBtn" value="Download Data" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
@@ -153,7 +157,7 @@ def index():
                     const btn = document.getElementById('submitBtn');
 
                     event.preventDefault();
-                    statusDiv.innerHTML = '<span style="color: blue;"><b>⏳ Processing your request, please wait... This may take a moment.</b></span>';
+                    statusDiv.innerHTML = '<span style="color: blue;"><b>⏳ Processing your request... Extracting and compressing data chunk by chunk, this may take a moment.</b></span>';
                     btn.disabled = true;
                     btn.style.background = '#ccc';
 
@@ -191,7 +195,7 @@ def index():
                             a.remove();
                             window.URL.revokeObjectURL(url);
                             
-                            statusDiv.innerHTML = '<span style="color: green;"><b>✅ Success! The file has been downloaded automatically.</b></span>';
+                            statusDiv.innerHTML = '<span style="color: green;"><b>✅ Success! Your data has been downloaded automatically.</b></span>';
                         }
                     }).catch(err => {
                         btn.disabled = false;
@@ -205,7 +209,6 @@ def index():
     ''', selected_cols=selected_cols, variables=variables, start_date=start_date,
        start_time=start_time, end_date=end_date, end_time=end_time, station_filter=station_filter)
 
-@app.route('/dataresult', methods=['POST'])
 @app.route('/dataresult', methods=['POST'])
 def data():
     if not processing_lock.acquire(blocking=False):
@@ -228,21 +231,14 @@ def data():
         start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         
-        # Validación de Límites
+        # Validación de Límites a 7 días unificado
         date_diff = end_datetime - start_datetime
         
-        if result_format == 'filejson':
-            if date_diff.days > 7:
-                processing_lock.release()
-                return jsonify({
-                    'error': 'For JSON file downloads of raw minute data, the maximum limit is 7 days due to data size constraints. Please reduce the date range or select CSV format.'
-                })
-        elif result_format == 'filecsv':
-            if date_diff.days > 31:
-                processing_lock.release()
-                return jsonify({
-                    'error': 'The maximum limit for CSV file downloads of raw minute data is 31 days (1 month). Please reduce the date range.'
-                })
+        if date_diff.days > 7:
+            processing_lock.release()
+            return jsonify({
+                'error': 'The maximum limit for raw minute data downloads is 7 days due to server constraints. Please reduce the date range.'
+            })
 
         metrics_regex = "|".join(variables)
         if station_filter:
@@ -251,65 +247,70 @@ def data():
         else:
             query = f'{{__name__=~"{metrics_regex}"}}'
 
-        # Descarga segura usando chunks de 1 hora
-        obs = fetch_vm_data(base_url, query, variables, start_datetime, end_datetime)
+        memory_file = io.BytesIO()
+        data_found_in_any_day = False
+        
+        # Abrimos el ZIP una sola vez y vamos metiendo archivos día a día
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            
+            # EL BUCLE MAGICO: Genera 1 bloque -> Escribe al Zip -> Libera RAM -> Repite
+            for day_start, daily_df in fetch_vm_data_daily_generator(base_url, query, variables, start_datetime, end_datetime):
+                
+                if daily_df.empty:
+                    continue
+                    
+                data_found_in_any_day = True
+                
+                # Nombre del archivo incluye la fecha y hora de inicio del bloque
+                # Ejemplo: 2026-05-15_1000
+                day_str = day_start.strftime('%Y-%m-%d_%H%M')
+                
+                # OPTIMIZACIÓN EXTREMA: Ordenamiento alfabético directo de ISO strings
+                daily_df = daily_df.sort_values(by=['station', 'date'])
 
-        if obs.empty:
+                for col in variables:
+                    if col in daily_df.columns:
+                        daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce').round(3)
+
+                total_records = daily_df.shape[0]
+
+                if result_format == 'filecsv':
+                    csv_buffer = io.StringIO()
+                    daily_df.to_csv(csv_buffer, index=False)
+                    # Guarda el archivo en el zip con el nombre de su fecha y hora
+                    zf.writestr(f'data_{day_str}.csv', csv_buffer.getvalue())
+                    csv_buffer.close()
+                
+                elif result_format == 'filejson':
+                    with zf.open(f'data_{day_str}.json', 'w') as json_file:
+                        json_file.write(f'{{\n  "total_records": {total_records},\n'.encode('utf-8'))
+                        json_file.write(f'  "date_start": "{day_start.isoformat()}Z",\n'.encode('utf-8'))
+                        json_file.write(b'  "data": {\n')
+                        
+                        first_station = True
+                        for station, group in daily_df.groupby('station'):
+                            if not first_station:
+                                json_file.write(b',\n')
+                            first_station = False
+                            
+                            json_file.write(f'    "{station}": '.encode('utf-8'))
+                            # to_json elimina NaNs nativamente, sin bloqueos de RAM
+                            json_str = group.drop(columns=['station']).to_json(orient='records')
+                            json_file.write(json_str.encode('utf-8'))
+                        
+                        json_file.write(b'\n  }\n}')
+                
+                # Forzamos a Python a destruir este día de la memoria RAM de inmediato
+                del daily_df
+
+        if not data_found_in_any_day:
             processing_lock.release()
             return jsonify({'message': 'No data found for the selected period and stations.'})
 
-        obs['date'] = pd.to_datetime(obs['date'], utc=True)
-        obs = obs.sort_values(by=['station', 'date'])
-
-        for col in variables:
-            if col in obs.columns:
-                obs[col] = pd.to_numeric(obs[col], errors='coerce').round(3)
-
-        total_records = obs.shape[0]
-        obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-        process_duration = time.time() - start_time_proc
-        hours, remainder = divmod(int(process_duration), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
-
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'data_raw_{start_date}_{end_date}_{timestamp}.zip'
-
-        memory_file = io.BytesIO()
-
-        # =========================================================
-        # CREACIÓN DE ARCHIVO EN STREAMING (Previene el MemoryError)
-        # =========================================================
-        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            
-            if result_format == 'filecsv':
-                with zf.open('data.csv', 'w') as csv_file:
-                    csv_buffer = io.StringIO()
-                    obs.to_csv(csv_buffer, index=False)
-                    csv_file.write(csv_buffer.getvalue().encode('utf-8'))
-            
-            elif result_format == 'filejson':
-                with zf.open('data.json', 'w') as json_file:
-                    # Escribimos los encabezados manualmente
-                    json_file.write(f'{{\n  "total_records": {total_records},\n'.encode('utf-8'))
-                    json_file.write(f'  "process_duration": "{formatted_duration}",\n'.encode('utf-8'))
-                    json_file.write(b'  "data": {\n')
-                    
-                    first_station = True
-                    for station, group in obs.groupby('station'):
-                        if not first_station:
-                            json_file.write(b',\n')
-                        first_station = False
-                        
-                        json_file.write(f'    "{station}": '.encode('utf-8'))
-                        # to_json convierte nativamente los NaNs en null sin saturar la RAM
-                        json_str = group.drop(columns=['station']).to_json(orient='records')
-                        json_file.write(json_str.encode('utf-8'))
-                    
-                    json_file.write(b'\n  }\n}')
-
         memory_file.seek(0)
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'data_raw_{start_date}_to_{end_date}_{timestamp}.zip'
+
         processing_lock.release()
         
         return Response(
