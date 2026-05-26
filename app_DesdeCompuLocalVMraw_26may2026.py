@@ -1,4 +1,4 @@
-# Para servidor local sin limites VM horario
+# Para servidor local sin limites VM minutal
 
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading
@@ -13,8 +13,9 @@ import json
 import logging
 import urllib.parse
 
+# 1. Variables min
 selected_cols = [
-    "PM25_1h", "PM25raw_1h", "PM1_1h", "Humidity_1h", "Temperature_1h",
+    "PM25", "PM25raw", "PM1", "Humidity", "Temperature",
 ]
 
 # Initialize Flask app and set logging level
@@ -26,7 +27,8 @@ processing_lock = threading.Lock()
 
 # Fast-track VM fetch with chunking to avoid 422 limit and pivot_table to avoid duplicates
 def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
-    chunk_size = datetime.timedelta(days=90)
+    # 2. Chunk size reducido a 7 días debido a la alta densidad de datos minutales
+    chunk_size = datetime.timedelta(days=7)
     current_start = start_datetime
     all_data = []
 
@@ -36,7 +38,8 @@ def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
         start_str = current_start.isoformat() + "Z"
         end_str = current_end.isoformat() + "Z"
         
-        query_url = f"{base_url}/query_range?query={urllib.parse.quote(query)}&start={start_str}&end={end_str}&step=1h"
+        # 3. step=1m
+        query_url = f"{base_url}/query_range?query={urllib.parse.quote(query)}&start={start_str}&end={end_str}&step=1m"
         
         app.logger.debug(f"Querying VictoriaMetrics chunk from {start_str} to {end_str}")
         
@@ -86,12 +89,13 @@ def index():
     variables = request.args.getlist('variables') or selected_cols
     
     now = datetime.datetime.now()
-    one_week_ago = now - datetime.timedelta(days=7)
+    one_day_ago = now - datetime.timedelta(days=1)
     
-    start_date = request.args.get('start_date', one_week_ago.strftime('%Y-%m-%d'))
+    # Valores por defecto: Último día (por la gran cantidad de datos)
+    start_date = request.args.get('start_date', one_day_ago.strftime('%Y-%m-%d'))
     start_time = request.args.get('start_time', '00:00')
     end_date = request.args.get('end_date', now.strftime('%Y-%m-%d'))
-    end_time = request.args.get('end_time', '00:00')
+    end_time = request.args.get('end_time', '23:00')
     
     station_filter = request.args.get('station_filter', '')
 
@@ -99,19 +103,20 @@ def index():
         <!DOCTYPE html>
         <html>
         <head>
-            <title>API AireCiudadano</title>
+            <title>API AireCiudadano Minutal 1m</title>
             <style>
                 body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; }
                 .alert { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; display: none; }
                 .alert-info { color: #31708f; background-color: #d9edf7; border-color: #bce8f1; display: block; }
+                .alert-warning { color: #8a6d3b; background-color: #fcf8e3; border-color: #faebcc; display: block; }
                 #status_message { margin-top: 15px; font-size: 16px; }
             </style>
         </head>
         <body>
             <form id="dataForm" action="/dataresult" method="post">
-                <h2>API AIRECIUDADANO v2.0 (VM)</h2>
-                <div class="alert alert-info">
-                    <strong>New!</strong> You can now download up to 1 year of data instantly using the CSV format.
+                <h2>API AIRECIUDADANO v2.0 (VM - Raw Per Minute Data)</h2>
+                <div class="alert alert-warning">
+                    <strong>Notice:</strong> This endpoint retrieves raw, minute-by-minute data. Due to the massive data volume, time limits are strictly enforced.
                 </div>
                 
                 <label><b>Select variables:</b></label><br><br>
@@ -134,9 +139,9 @@ def index():
 
                 <label>Result format:</label>
                 <select id="result_format" name="result_format">
-                    <option value="screen">Result in screen (Max 7 days)</option>
-                    <option value="filejson">Result in ZIP JSON (Max 6 months)</option>
-                    <option value="filecsv">Result in ZIP CSV (Max 1 year)</option>
+                    <option value="screen">Result in screen (Max 1 day)</option>
+                    <option value="filejson">Result in ZIP JSON (Max 7 days)</option>
+                    <option value="filecsv">Result in ZIP CSV (Max 31 days)</option>
                 </select><br><br>
 
                 <input type="submit" id="submitBtn" value="Download Data" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
@@ -150,13 +155,11 @@ def index():
                     const statusDiv = document.getElementById('status_message');
                     const btn = document.getElementById('submitBtn');
                     
-                    // If returning to screen, let standard HTML form behavior handle it
                     if (format === 'screen') {
                         statusDiv.innerHTML = '<span style="color: blue;"><b>Processing your request...</b></span>';
                         return true; 
                     }
 
-                    // For file downloads, intercept to show exact status
                     event.preventDefault();
                     statusDiv.innerHTML = '<span style="color: blue;"><b>⏳ Processing your request, please wait... This may take a moment.</b></span>';
                     btn.disabled = true;
@@ -171,7 +174,6 @@ def index():
                         
                         const contentType = response.headers.get('content-type');
                         
-                        // If response is JSON, it means an error occurred
                         if (contentType && contentType.includes('application/json')) {
                             const data = await response.json();
                             if (data.error) {
@@ -180,14 +182,12 @@ def index():
                                 statusDiv.innerHTML = '<span style="color: orange;"><b>⚠️ Notice:</b> ' + data.message + '</span>';
                             }
                         } else {
-                            // If response is ZIP file, process the download
                             const blob = await response.blob();
                             const url = window.URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
                             
-                            // Try to read original filename, otherwise create one
-                            let filename = 'data_export.zip';
+                            let filename = 'data_export_raw.zip';
                             const disp = response.headers.get('Content-Disposition');
                             if (disp && disp.includes('filename=')) {
                                 filename = disp.split('filename=')[1].replace(/"/g, '');
@@ -235,26 +235,26 @@ def data():
         start_datetime = datetime.datetime.fromisoformat(f"{start_date}T{start_time_str}")
         end_datetime = datetime.datetime.fromisoformat(f"{end_date}T{end_time}")
         
-        # Validation Limits
+        # 4. Strict Validation Limits for Minute Data
         date_diff = end_datetime - start_datetime
         
         if result_format == 'screen':
+            if date_diff.days > 1:
+                processing_lock.release()
+                return jsonify({
+                    'error': 'For screen visualization of raw minute data, the maximum limit is 1 day to prevent browser freezing. Please reduce the date range or select JSON/CSV file format.'
+                })
+        elif result_format == 'filejson':
             if date_diff.days > 7:
                 processing_lock.release()
                 return jsonify({
-                    'error': 'For screen visualization, the maximum limit is 7 days to prevent browser freezing. Please reduce the date range or select JSON/CSV file format.'
-                })
-        elif result_format == 'filejson':
-            if date_diff.days > 183:
-                processing_lock.release()
-                return jsonify({
-                    'error': 'For JSON file downloads, the maximum limit is 6 months (183 days) due to data size constraints. Please reduce the date range or select CSV format.'
+                    'error': 'For JSON file downloads of raw minute data, the maximum limit is 7 days due to data size constraints. Please reduce the date range or select CSV format.'
                 })
         elif result_format == 'filecsv':
-            if date_diff.days > 366:
+            if date_diff.days > 31:
                 processing_lock.release()
                 return jsonify({
-                    'error': 'The maximum limit for CSV file downloads is 1 full year (365 days). Please reduce the date range.'
+                    'error': 'The maximum limit for CSV file downloads of raw minute data is 31 days (1 month). Please reduce the date range.'
                 })
 
         metrics_regex = "|".join(variables)
@@ -289,7 +289,7 @@ def data():
         formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
 
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
+        filename = f'data_raw_{start_date}_{end_date}_{timestamp}.zip'
 
         if result_format == 'filecsv':
             memory_file = io.BytesIO()

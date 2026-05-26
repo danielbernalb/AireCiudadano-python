@@ -91,7 +91,7 @@ def index():
     start_date = request.args.get('start_date', one_week_ago.strftime('%Y-%m-%d'))
     start_time = request.args.get('start_time', '00:00')
     end_date = request.args.get('end_date', now.strftime('%Y-%m-%d'))
-    end_time = request.args.get('end_time', '00:00')
+    end_time = request.args.get('end_time', '23:00')
     
     station_filter = request.args.get('station_filter', '')
 
@@ -99,7 +99,7 @@ def index():
         <!DOCTYPE html>
         <html>
         <head>
-            <title>API AireCiudadano</title>
+            <title>API AireCiudadano horario 1h</title>
             <style>
                 body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; }
                 .alert { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; display: none; }
