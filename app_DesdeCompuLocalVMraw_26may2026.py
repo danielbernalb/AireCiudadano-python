@@ -117,7 +117,7 @@ def index():
         </head>
         <body>
             <form id="dataForm" action="/dataresult" method="post">
-                <h2>API AIRECIUDADANO v2.0 (VM - Raw Per Minute Data)</h2>
+                <h2>API AIRECIUDADANO v2.0 (VM - RAW 1m)</h2>
                 <div class="alert alert-warning">
                     <strong>Notice:</strong> This endpoint retrieves raw, minute-by-minute data. Due to the massive data volume, <b>the maximum download limit is 7 days</b> for all formats.
                 </div>
