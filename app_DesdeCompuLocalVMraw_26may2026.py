@@ -1,3 +1,5 @@
+# API para descargar datos RAW por minuto desde VM, con límite de 7 días optimizado para RAM y velocidad.
+
 from flask import Flask, request, jsonify, render_template_string, send_file, Response
 import threading
 import requests
