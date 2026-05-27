@@ -129,11 +129,11 @@ def index():
                 {% endfor %}
                 <br>
                 
-                <label>Start date/time:</label>
+                <label>Start date/time (UTC+0/GMT0):</label>
                 <input type="date" name="start_date" value="{{ start_date }}" required>
                 <input type="time" name="start_time" value="{{ start_time }}" step="3600" required><br><br>
                 
-                <label>End date/time:</label>
+                <label>End date/time (UTC+0/GMT0):</label>
                 <input type="date" name="end_date" value="{{ end_date }}" required>
                 <input type="time" name="end_time" value="{{ end_time }}" step="3600" required><br><br>
                 
