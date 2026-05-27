@@ -24,11 +24,10 @@ app.logger.setLevel(logging.DEBUG)
 # Global lock for one-at-a-time processing
 processing_lock = threading.Lock()
 
-# Fast-track VM fetch with chunking to avoid 422 limit and pivot_table to avoid duplicates
-def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
+# Generador Mágico: Descarga por bloques de 90 días y suelta la memoria
+def fetch_vm_data_generator(base_url, query, selected_cols, start_datetime, end_datetime):
     chunk_size = datetime.timedelta(days=90)
     current_start = start_datetime
-    all_data = []
 
     while current_start < end_datetime:
         current_end = min(current_start + chunk_size, end_datetime)
@@ -40,6 +39,7 @@ def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
         
         app.logger.debug(f"Querying VictoriaMetrics chunk from {start_str} to {end_str}")
         
+        chunk_data = []
         try:
             response = requests.get(query_url)
             if response.status_code == 422:
@@ -53,7 +53,8 @@ def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
                 
                 if 'metric.job' in df.columns and 'values' in df.columns:
                     df = df.explode('values')
-                    df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], tz=datetime.timezone.utc).isoformat())
+                    # Mantenemos la fecha como String directamente. Ahorra 90% de CPU
+                    df['date'] = df['values'].apply(lambda x: datetime.datetime.fromtimestamp(x[0], tz=datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
                     df['value'] = df['values'].apply(lambda x: float(x[1]))
                     df = df.drop(columns="values")
 
@@ -61,25 +62,27 @@ def fetch_vm_data(base_url, query, selected_cols, start_datetime, end_datetime):
                     df = df[df['station'].notnull()]
 
                     if not df.empty:
+                        # pivot_table previene errores si un sensor mandó datos dobles
                         df_result = pd.pivot_table(df, index=['station', 'date'], columns='metric_name', values='value', aggfunc='mean').reset_index()
-                        all_data.append(df_result)
+                        chunk_data.append(df_result)
                         
         except Exception as e:
             app.logger.error(f'Error processing chunk: {str(e)}')
             pass 
 
-        current_start = current_end
-
-    if not all_data:
-        return pd.DataFrame(columns=['station', 'date'] + selected_cols)
-
-    final_df = pd.concat(all_data, ignore_index=True)
-    
-    for col in selected_cols:
-        if col not in final_df.columns:
-            final_df[col] = np.nan
+        # Si hubo datos en este bloque, los "rendimos" (yield) a Flask
+        if chunk_data:
+            final_chunk_df = pd.concat(chunk_data, ignore_index=True)
+            chunk_data.clear() # Limpia la RAM inmediatamente
             
-    return final_df
+            for col in selected_cols:
+                if col not in final_chunk_df.columns:
+                    final_chunk_df[col] = np.nan
+            yield current_start, final_chunk_df
+        else:
+            yield current_start, pd.DataFrame(columns=['station', 'date'] + selected_cols)
+
+        current_start = current_end
 
 @app.route('/getdata')
 def index():
@@ -99,7 +102,7 @@ def index():
         <!DOCTYPE html>
         <html>
         <head>
-            <title>API AireCiudadano horario 1h</title>
+            <title>API AireCiudadano Horario 1h</title>
             <style>
                 body { font-family: Arial, sans-serif; max-width: 600px; margin: 20px auto; }
                 .alert { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; display: none; }
@@ -109,9 +112,9 @@ def index():
         </head>
         <body>
             <form id="dataForm" action="/dataresult" method="post">
-                <h2>API AIRECIUDADANO v2.0 (VM)</h2>
+                <h2>API AIRECIUDADANO v2.0 (VM - Hourly Averages)</h2>
                 <div class="alert alert-info">
-                    <strong>New!</strong> You can now download up to 1 year of data instantly using the CSV format.
+                    <strong>New!</strong> Download up to 1 year of hourly data instantly using the CSV format. Large JSON downloads will be bundled in 90-day chunks to preserve memory
                 </div>
                 
                 <label><b>Select variables:</b></label><br><br>
@@ -121,11 +124,11 @@ def index():
                 {% endfor %}
                 <br>
                 
-                <label>Start date/time:</label>
+                <label>Start date/time (UTC+0/GMT0):</label>
                 <input type="date" name="start_date" value="{{ start_date }}" required>
                 <input type="time" name="start_time" value="{{ start_time }}" step="3600" required><br><br>
                 
-                <label>End date/time:</label>
+                <label>End date/time (UTC+0/GMT0):</label>
                 <input type="date" name="end_date" value="{{ end_date }}" required>
                 <input type="time" name="end_time" value="{{ end_time }}" step="3600" required><br><br>
                 
@@ -150,15 +153,13 @@ def index():
                     const statusDiv = document.getElementById('status_message');
                     const btn = document.getElementById('submitBtn');
                     
-                    // If returning to screen, let standard HTML form behavior handle it
                     if (format === 'screen') {
                         statusDiv.innerHTML = '<span style="color: blue;"><b>Processing your request...</b></span>';
                         return true; 
                     }
 
-                    // For file downloads, intercept to show exact status
                     event.preventDefault();
-                    statusDiv.innerHTML = '<span style="color: blue;"><b>⏳ Processing your request, please wait... This may take a moment.</b></span>';
+                    statusDiv.innerHTML = '<span style="color: blue;"><b>⏳ Processing your request... Extracting and compressing data chunk by chunk, this may take a moment.</b></span>';
                     btn.disabled = true;
                     btn.style.background = '#ccc';
 
@@ -171,7 +172,6 @@ def index():
                         
                         const contentType = response.headers.get('content-type');
                         
-                        // If response is JSON, it means an error occurred
                         if (contentType && contentType.includes('application/json')) {
                             const data = await response.json();
                             if (data.error) {
@@ -180,14 +180,12 @@ def index():
                                 statusDiv.innerHTML = '<span style="color: orange;"><b>⚠️ Notice:</b> ' + data.message + '</span>';
                             }
                         } else {
-                            // If response is ZIP file, process the download
                             const blob = await response.blob();
                             const url = window.URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
                             
-                            // Try to read original filename, otherwise create one
-                            let filename = 'data_export.zip';
+                            let filename = 'data_export_hourly.zip';
                             const disp = response.headers.get('Content-Disposition');
                             if (disp && disp.includes('filename=')) {
                                 filename = disp.split('filename=')[1].replace(/"/g, '');
@@ -199,7 +197,7 @@ def index():
                             a.remove();
                             window.URL.revokeObjectURL(url);
                             
-                            statusDiv.innerHTML = '<span style="color: green;"><b>✅ Success! The file has been downloaded automatically.</b></span>';
+                            statusDiv.innerHTML = '<span style="color: green;"><b>✅ Success! Your data has been downloaded automatically.</b></span>';
                         }
                     }).catch(err => {
                         btn.disabled = false;
@@ -264,82 +262,116 @@ def data():
         else:
             query = f'{{__name__=~"{metrics_regex}"}}'
 
-        obs = fetch_vm_data(base_url, query, variables, start_datetime, end_datetime)
+        # ==========================================
+        # RUTA PANTALLA: Carga completa en RAM
+        # ==========================================
+        if result_format == 'screen':
+            # Solo permite 7 días, así que podemos cargarlo todo a la vez
+            obs = fetch_vm_data_generator(base_url, query, variables, start_datetime, end_datetime)
+            # Extrayendo el único chunk esperado
+            for chunk_start, chunk_df in obs:
+                if chunk_df.empty:
+                    processing_lock.release()
+                    return jsonify({'message': 'No data found for the selected period and stations.'})
+                
+                chunk_df = chunk_df.sort_values(by=['station', 'date'])
+                
+                for col in variables:
+                    if col in chunk_df.columns:
+                        chunk_df[col] = pd.to_numeric(chunk_df[col], errors='coerce').round(3)
+                        
+                chunk_df = chunk_df.replace({np.nan: None})
+                
+                grouped_data = {
+                    station: group.drop(columns=['station']).to_dict(orient='records') 
+                    for station, group in chunk_df.groupby('station')
+                }
+                
+                process_duration = time.time() - start_time_proc
+                hours, remainder = divmod(int(process_duration), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
+                
+                result_data = {
+                    'total_records': chunk_df.shape[0],
+                    'data': grouped_data,
+                    'process_duration': formatted_duration
+                }
+                
+                processing_lock.release()
+                return jsonify(result_data)
 
-        if obs.empty:
+        # ==========================================
+        # RUTAS ARCHIVO: Streaming a ZIP por Chunks
+        # ==========================================
+        memory_file = io.BytesIO()
+        data_found_in_any_chunk = False
+        
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            
+            for chunk_start, chunk_df in fetch_vm_data_generator(base_url, query, variables, start_datetime, end_datetime):
+                
+                if chunk_df.empty:
+                    continue
+                    
+                data_found_in_any_chunk = True
+                
+                # Nombre del archivo basado en el inicio del chunk de 90 días
+                chunk_str = chunk_start.strftime('%Y-%m-%d')
+                
+                chunk_df = chunk_df.sort_values(by=['station', 'date'])
+
+                for col in variables:
+                    if col in chunk_df.columns:
+                        chunk_df[col] = pd.to_numeric(chunk_df[col], errors='coerce').round(3)
+
+                total_records = chunk_df.shape[0]
+
+                if result_format == 'filecsv':
+                    csv_buffer = io.StringIO()
+                    chunk_df.to_csv(csv_buffer, index=False)
+                    zf.writestr(f'data_hourly_{chunk_str}.csv', csv_buffer.getvalue())
+                    csv_buffer.close()
+                
+                elif result_format == 'filejson':
+                    with zf.open(f'data_hourly_{chunk_str}.json', 'w') as json_file:
+                        json_file.write(f'{{\n  "total_records": {total_records},\n'.encode('utf-8'))
+                        json_file.write(f'  "chunk_start": "{chunk_start.isoformat()}Z",\n'.encode('utf-8'))
+                        json_file.write(b'  "data": {\n')
+                        
+                        first_station = True
+                        for station, group in chunk_df.groupby('station'):
+                            if not first_station:
+                                json_file.write(b',\n')
+                            first_station = False
+                            
+                            json_file.write(f'    "{station}": '.encode('utf-8'))
+                            json_str = group.drop(columns=['station']).to_json(orient='records')
+                            json_file.write(json_str.encode('utf-8'))
+                        
+                        json_file.write(b'\n  }\n}')
+                
+                # Forzamos a Python a destruir este bloque de la memoria RAM de inmediato
+                del chunk_df
+
+        if not data_found_in_any_chunk:
             processing_lock.release()
             return jsonify({'message': 'No data found for the selected period and stations.'})
 
-        obs['date'] = pd.to_datetime(obs['date'], utc=True)
-        obs = obs.sort_values(by=['station', 'date'])
-
-        for col in variables:
-            if col in obs.columns:
-                obs[col] = pd.to_numeric(obs[col], errors='coerce').round(3)
-
-        total_records = obs.shape[0]
-        obs['date'] = obs['date'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-        # Fast NaN replacement
-        obs = obs.replace({np.nan: None})
-
-        process_duration = time.time() - start_time_proc
-        hours, remainder = divmod(int(process_duration), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        formatted_duration = f"{hours}:{minutes:02}:{seconds:02}"
-
+        memory_file.seek(0)
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'data_{start_date}_{end_date}_{timestamp}.zip'
+        filename = f'data_hourly_{start_date}_to_{end_date}_{timestamp}.zip'
 
-        if result_format == 'filecsv':
-            memory_file = io.BytesIO()
-            with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-                csv_buffer = io.StringIO()
-                obs.to_csv(csv_buffer, index=False)
-                zf.writestr('data.csv', csv_buffer.getvalue())
-            memory_file.seek(0)
-            
-            processing_lock.release()
-            return Response(
-                memory_file.getvalue(),
-                mimetype='application/zip',
-                headers={
-                    'Content-Disposition': f'attachment; filename="{filename}"',
-                    'Access-Control-Expose-Headers': 'Content-Disposition'
-                }
-            )
-
-        # Dictionary build only runs if result_format is 'screen' or 'filejson'
-        grouped_data = {
-            station: group.drop(columns=['station']).to_dict(orient='records') 
-            for station, group in obs.groupby('station')
-        }
-
-        result_data = {
-            'total_records': total_records,
-            'data': grouped_data,
-            'process_duration': formatted_duration
-        }
-
-        if result_format == 'screen':
-            processing_lock.release()
-            return jsonify(result_data)
-        elif result_format == 'filejson':
-            memory_file = io.BytesIO()
-            with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-                data_str = json.dumps(result_data, indent=2)
-                zf.writestr('data.json', data_str)
-            memory_file.seek(0)
-            
-            processing_lock.release()
-            return Response(
-                memory_file.getvalue(),
-                mimetype='application/zip',
-                headers={
-                    'Content-Disposition': f'attachment; filename="{filename}"',
-                    'Access-Control-Expose-Headers': 'Content-Disposition'
-                }
-            )
+        processing_lock.release()
+        
+        return Response(
+            memory_file.getvalue(),
+            mimetype='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Access-Control-Expose-Headers': 'Content-Disposition'
+            }
+        )
 
     except Exception as e:
         if processing_lock.locked():
